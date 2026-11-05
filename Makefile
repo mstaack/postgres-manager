@@ -22,7 +22,7 @@ help:
 
 GO_ARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 GO_LDFLAGS := -s -w -X main.version=$(shell cat VERSION)
-GOLANGCI := docker run --rm -v "$(CURDIR):/app" -w /app golangci/golangci-lint:v2.1.6
+GOLANGCI := docker run --rm -v "$(CURDIR):/app" -w /app golangci/golangci-lint:v2.4.0
 
 go-build: ## Build dist/pgm-linux-$(GO_ARCH) (GO_ARCH=amd64|arm64)
 	@CGO_ENABLED=0 GOOS=linux GOARCH=$(GO_ARCH) go build -trimpath -ldflags "$(GO_LDFLAGS)" -o dist/pgm-linux-$(GO_ARCH) ./cmd/pgm
