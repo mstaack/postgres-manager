@@ -61,3 +61,8 @@ describe_cron() {
 version_ge() {
   [[ $(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1) == "$2" ]]
 }
+
+## random_secret [LEN] — alphanumeric, safe in .env files and URLs (max 64)
+random_secret() {
+  head -c 48 /dev/urandom | base64 | tr -d '\n/+=' | head -c "${1:-32}"
+}

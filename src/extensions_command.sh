@@ -1,4 +1,4 @@
-pg_ready || die "PostgreSQL $PG_VERSION/$PG_CLUSTER is not running"
+require_pg
 preload=$(pg_setting shared_preload_libraries)
 
 header "Extensions · PostgreSQL $PG_VERSION/$PG_CLUSTER"

@@ -14,9 +14,9 @@ version_command() {
 postgres_manager_usage() {
   if [[ -n $long_usage ]]; then
     printf "postgres-manager\n\n"
-    printf "  PostgreSQL status, pgBackRest point-in-time recovery and extensions for\n  Debian/Ubuntu servers.\n  Works nicely with Laravel Forge (discovers apps from /home/*/*/.env). Run as\n  root.\n\n"
+    printf "  PostgreSQL manager for Debian/Ubuntu servers: status, databases, users (incl.\n  read-only), extensions and pgBackRest point-in-time recovery.\n  Works nicely with Laravel Forge (discovers apps from /home/*/*/.env). Run as\n  root.\n\n"
   else
-    printf "postgres-manager - PostgreSQL status, pgBackRest point-in-time recovery and extensions for Debian/Ubuntu servers.\n\n"
+    printf "postgres-manager - PostgreSQL manager for Debian/Ubuntu servers: status, databases, users (incl. read-only), extensions and pgBackRest point-in-time recovery.\n\n"
   fi
 
   printf "%s\n" "Usage:"
@@ -28,14 +28,16 @@ postgres_manager_usage() {
   printf "%s\n" "Commands:"
   printf "  %s   Status dashboard and interactive menu (default)\n" "menu       "
   printf "  %s   Show system, PostgreSQL, WAL archiving and backup status\n" "status     "
+  printf "  %s   List, create and drop databases (interactive menu without a subcommand)\n" "db         "
+  printf "  %s   List, create and drop users, read-only access and passwords (interactive menu without a subcommand)\n" "user       "
+  printf "  %s   Install and enable PostGIS, pgvector, TimescaleDB, pg_cron and pg_stat_statements (packages, preload, CREATE EXTENSION)\n" "extensions "
   printf "  %s   Configure pgBackRest backups and WAL archiving (Cloudflare R2, S3 or a local directory)\n" "setup      "
-  printf "  %s   Change schedule, retention, RPO, performance, repository or heartbeat\n" "edit       "
-  printf "  %s   List backups and the point-in-time recovery window\n" "list       "
-  printf "  %s   Run a backup now\n" "backup     "
-  printf "  %s   Verify WAL archiving and repository access\n" "check      "
-  printf "  %s   Restore drill - restore the latest backup into a temporary directory, start it, compare it with the live cluster, remove it\n" "verify     "
+  printf "  %s   Change backup schedule, retention, RPO (max. data loss), performance, repository or heartbeat URL\n" "edit       "
+  printf "  %s   List backup sets (type, time, size) and the point-in-time recovery window\n" "list       "
+  printf "  %s   Run a backup now (full = everything, diff = changes since the last full, incr = changes since the last backup)\n" "backup     "
+  printf "  %s   Run pgBackRest's check - a test WAL segment is archived and the repository is reachable\n" "check      "
+  printf "  %s   Restore drill - proves the backups can be restored. Restores the latest backup with all WAL into a temporary directory, starts it, compares databases and sizes with the live cluster, then removes it\n" "verify     "
   printf "  %s   Restore or point-in-time recovery (interactive without flags)\n" "restore    "
-  printf "  %s   Install and enable PostGIS, pgvector, TimescaleDB, pg_cron and pg_stat_statements\n" "extensions "
   printf "  %s   Update postgres-manager from GitHub\n" "self-update"
   echo
 
@@ -53,6 +55,8 @@ postgres_manager_usage() {
     printf "%s\n" "Examples:"
     printf "  sudo postgres-manager\n"
     printf "  sudo postgres-manager setup\n"
+    printf "  sudo postgres-manager db create shop --owner shop\n"
+    printf "  sudo postgres-manager user create metabase --read-only shop,crm\n"
     printf "  sudo postgres-manager restore --time \"2026-11-05 10:42\"\n"
     echo
 
@@ -97,6 +101,392 @@ postgres_manager_status_usage() {
   fi
 }
 
+postgres_manager_db_usage() {
+  printf "postgres-manager db - List, create and drop databases (interactive menu without a subcommand)\n\n"
+  printf "Alias: databases\n"
+  echo
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager db [COMMAND]\n"
+  printf "  postgres-manager db [COMMAND] --help | -h\n"
+  echo
+
+  printf "%s\n" "Commands:"
+  printf "  %s   Databases with size, owner, sessions, read-only users and apps\n" "list  "
+  printf "  %s   Create a database owned by a user (the user is created with a generated password if missing)\n" "create"
+  printf "  %s   Drop a database (terminates its sessions; typed confirmation)\n" "drop  "
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+  fi
+}
+
+postgres_manager_db_menu_usage() {
+  printf "postgres-manager db menu - Interactive database menu\n\n"
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager db [menu]\n"
+  printf "  postgres-manager db menu --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+  fi
+}
+
+postgres_manager_db_list_usage() {
+  printf "postgres-manager db list - Databases with size, owner, sessions, read-only users and apps\n\n"
+  printf "Alias: ls\n"
+  echo
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager db list\n"
+  printf "  postgres-manager db list --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+  fi
+}
+
+postgres_manager_db_create_usage() {
+  printf "postgres-manager db create - Create a database owned by a user (the user is created with a generated password if missing)\n\n"
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager db create [NAME] [OPTIONS]\n"
+  printf "  postgres-manager db create --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--owner USER"
+    printf "    Owner user (default = database name)\n"
+    echo
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+    printf "%s\n" "Arguments:"
+
+    printf "  %s\n" "NAME"
+    printf "    Database name (lowercase letters, digits, _); prompted if omitted\n"
+    echo
+
+    printf "%s\n" "Examples:"
+    printf "  postgres-manager db create shop\n"
+    printf "  postgres-manager db create shop --owner forge\n"
+    echo
+
+  fi
+}
+
+postgres_manager_db_drop_usage() {
+  printf "postgres-manager db drop - Drop a database (terminates its sessions; typed confirmation)\n\n"
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager db drop [NAME] [OPTIONS]\n"
+  printf "  postgres-manager db drop --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--yes, -y"
+    printf "    Skip confirmations\n"
+    echo
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+    printf "%s\n" "Arguments:"
+
+    printf "  %s\n" "NAME"
+    printf "    Database name; prompted if omitted\n"
+    echo
+
+  fi
+}
+
+postgres_manager_user_usage() {
+  printf "postgres-manager user - List, create and drop users, read-only access and passwords (interactive menu without a subcommand)\n\n"
+  printf "Alias: users\n"
+  echo
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager user [COMMAND]\n"
+  printf "  postgres-manager user [COMMAND] --help | -h\n"
+  echo
+
+  printf "%s\n" "Commands:"
+  printf "  %s   Users with flags, owned databases, read-only access, sessions and apps\n" "list    "
+  printf "  %s   Create a login user (password generated and shown once unless --password-stdin)\n" "create  "
+  printf "  %s   Set a new password (generated and shown once unless --password-stdin)\n" "password"
+  printf "  %s   Grant read-only access (SELECT on all tables, incl. future ones) on databases\n" "grant   "
+  printf "  %s   Revoke read-only access on databases\n" "revoke  "
+  printf "  %s   Drop a user (refuses while it owns databases; typed confirmation)\n" "drop    "
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+  fi
+}
+
+postgres_manager_user_menu_usage() {
+  printf "postgres-manager user menu - Interactive user menu\n\n"
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager user [menu]\n"
+  printf "  postgres-manager user menu --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+  fi
+}
+
+postgres_manager_user_list_usage() {
+  printf "postgres-manager user list - Users with flags, owned databases, read-only access, sessions and apps\n\n"
+  printf "Alias: ls\n"
+  echo
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager user list\n"
+  printf "  postgres-manager user list --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+  fi
+}
+
+postgres_manager_user_create_usage() {
+  printf "postgres-manager user create - Create a login user (password generated and shown once unless --password-stdin)\n\n"
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager user create [NAME] [OPTIONS]\n"
+  printf "  postgres-manager user create --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--read-only DATABASES"
+    printf "    Make it a read-only user with SELECT on these databases (comma-separated, or\n    'all')\n"
+    echo
+
+    printf "  %s\n" "--password-stdin"
+    printf "    Read the password from the first line of stdin\n"
+    echo
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+    printf "%s\n" "Arguments:"
+
+    printf "  %s\n" "NAME"
+    printf "    User name (lowercase letters, digits, _); prompted if omitted\n"
+    echo
+
+    printf "%s\n" "Examples:"
+    printf "  postgres-manager user create metabase --read-only shop,crm\n"
+    printf "  postgres-manager user create analyst --read-only all\n"
+    printf "  echo \"$PASS\" | postgres-manager user create deploy --password-stdin\n"
+    echo
+
+  fi
+}
+
+postgres_manager_user_password_usage() {
+  printf "postgres-manager user password - Set a new password (generated and shown once unless --password-stdin)\n\n"
+  printf "Alias: passwd\n"
+  echo
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager user password [NAME] [OPTIONS]\n"
+  printf "  postgres-manager user password --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--password-stdin"
+    printf "    Read the password from the first line of stdin\n"
+    echo
+
+    printf "  %s\n" "--yes, -y"
+    printf "    Skip confirmations\n"
+    echo
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+    printf "%s\n" "Arguments:"
+
+    printf "  %s\n" "NAME"
+    printf "    User name; prompted if omitted\n"
+    echo
+
+  fi
+}
+
+postgres_manager_user_grant_usage() {
+  printf "postgres-manager user grant - Grant read-only access (SELECT on all tables, incl. future ones) on databases\n\n"
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager user grant [NAME] [DATABASES]\n"
+  printf "  postgres-manager user grant --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+    printf "%s\n" "Arguments:"
+
+    printf "  %s\n" "NAME"
+    printf "    User name; prompted if omitted\n"
+    echo
+
+    printf "  %s\n" "DATABASES"
+    printf "    Comma-separated databases or 'all'; prompted if omitted\n"
+    echo
+
+    printf "%s\n" "Examples:"
+    printf "  postgres-manager user grant metabase shop,crm\n"
+    echo
+
+  fi
+}
+
+postgres_manager_user_revoke_usage() {
+  printf "postgres-manager user revoke - Revoke read-only access on databases\n\n"
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager user revoke [NAME] [DATABASES]\n"
+  printf "  postgres-manager user revoke --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+    printf "%s\n" "Arguments:"
+
+    printf "  %s\n" "NAME"
+    printf "    User name; prompted if omitted\n"
+    echo
+
+    printf "  %s\n" "DATABASES"
+    printf "    Comma-separated databases or 'all'; prompted if omitted\n"
+    echo
+
+  fi
+}
+
+postgres_manager_user_drop_usage() {
+  printf "postgres-manager user drop - Drop a user (refuses while it owns databases; typed confirmation)\n\n"
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager user drop [NAME] [OPTIONS]\n"
+  printf "  postgres-manager user drop --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--yes, -y"
+    printf "    Skip confirmations\n"
+    echo
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+    printf "%s\n" "Arguments:"
+
+    printf "  %s\n" "NAME"
+    printf "    User name; prompted if omitted\n"
+    echo
+
+  fi
+}
+
+postgres_manager_extensions_usage() {
+  printf "postgres-manager extensions - Install and enable PostGIS, pgvector, TimescaleDB, pg_cron and pg_stat_statements (packages, preload, CREATE EXTENSION)\n\n"
+  printf "Alias: ext\n"
+  echo
+
+  printf "%s\n" "Usage:"
+  printf "  postgres-manager extensions\n"
+  printf "  postgres-manager extensions --help | -h\n"
+  echo
+
+  if [[ -n "$long_usage" ]]; then
+
+    printf "%s\n" "Options:"
+
+    printf "  %s\n" "--help, -h"
+    printf "    Show this help\n"
+    echo
+
+  fi
+}
+
 postgres_manager_setup_usage() {
   printf "postgres-manager setup - Configure pgBackRest backups and WAL archiving (Cloudflare R2, S3 or a local directory)\n\n"
 
@@ -117,7 +507,7 @@ postgres_manager_setup_usage() {
 }
 
 postgres_manager_edit_usage() {
-  printf "postgres-manager edit - Change schedule, retention, RPO, performance, repository or heartbeat\n\n"
+  printf "postgres-manager edit - Change backup schedule, retention, RPO (max. data loss), performance, repository or heartbeat URL\n\n"
 
   printf "%s\n" "Usage:"
   printf "  postgres-manager edit\n"
@@ -136,7 +526,7 @@ postgres_manager_edit_usage() {
 }
 
 postgres_manager_list_usage() {
-  printf "postgres-manager list - List backups and the point-in-time recovery window\n\n"
+  printf "postgres-manager list - List backup sets (type, time, size) and the point-in-time recovery window\n\n"
   printf "Alias: ls\n"
   echo
 
@@ -157,7 +547,7 @@ postgres_manager_list_usage() {
 }
 
 postgres_manager_backup_usage() {
-  printf "postgres-manager backup - Run a backup now\n\n"
+  printf "postgres-manager backup - Run a backup now (full = everything, diff = changes since the last full, incr = changes since the last backup)\n\n"
 
   printf "%s\n" "Usage:"
   printf "  postgres-manager backup [TYPE]\n"
@@ -189,7 +579,7 @@ postgres_manager_backup_usage() {
 }
 
 postgres_manager_check_usage() {
-  printf "postgres-manager check - Verify WAL archiving and repository access\n\n"
+  printf "postgres-manager check - Run pgBackRest's check - a test WAL segment is archived and the repository is reachable\n\n"
 
   printf "%s\n" "Usage:"
   printf "  postgres-manager check\n"
@@ -208,7 +598,7 @@ postgres_manager_check_usage() {
 }
 
 postgres_manager_verify_usage() {
-  printf "postgres-manager verify - Restore drill - restore the latest backup into a temporary directory, start it, compare it with the live cluster, remove it\n\n"
+  printf "postgres-manager verify - Restore drill - proves the backups can be restored. Restores the latest backup with all WAL into a temporary directory, starts it, compares databases and sizes with the live cluster, then removes it\n\n"
 
   printf "%s\n" "Usage:"
   printf "  postgres-manager verify [OPTIONS]\n"
@@ -267,27 +657,6 @@ postgres_manager_restore_usage() {
     printf "  postgres-manager restore\n"
     printf "  postgres-manager restore --time \"2026-11-05 10:42\" --target-dir\n  /var/lib/postgresql/pitr\n"
     printf "  postgres-manager restore --set 20261105-013001F --yes\n"
-    echo
-
-  fi
-}
-
-postgres_manager_extensions_usage() {
-  printf "postgres-manager extensions - Install and enable PostGIS, pgvector, TimescaleDB, pg_cron and pg_stat_statements\n\n"
-  printf "Alias: ext\n"
-  echo
-
-  printf "%s\n" "Usage:"
-  printf "  postgres-manager extensions\n"
-  printf "  postgres-manager extensions --help | -h\n"
-  echo
-
-  if [[ -n "$long_usage" ]]; then
-
-    printf "%s\n" "Options:"
-
-    printf "  %s\n" "--help, -h"
-    printf "    Show this help\n"
     echo
 
   fi
@@ -365,6 +734,287 @@ normalize_input() {
     fi
 
     shift
+  done
+}
+
+# Schemas that hold user data (filters pg_namespace; no system, toast or temp schemas)
+USER_SCHEMAS="nspname !~ '^pg_' and nspname <> 'information_schema'"
+
+user_databases() {
+  psql_q "select datname from pg_database where datallowconn and not datistemplate and datname <> 'postgres' order by 1"
+}
+
+list_roles() {
+  psql_q "select rolname from pg_roles where rolname !~ '^pg_' order by 1"
+}
+
+apps_using() {
+  local col=$1 value=$2
+  scan_apps | awk -F'\t' -v c="$col" -v v="$value" '$c == v {print $1}' | xargs -r -n1 basename | paste -sd',' - | sed 's/,/, /g'
+}
+
+ask_new_name() {
+  local __nn_var=$1 __nn_prompt=$2 __nn_kind=$3 __nn_def=${4-} __nn_reply
+  while :; do
+    ask __nn_reply "$__nn_prompt" "$__nn_def"
+    if ! valid_name "$__nn_reply"; then
+      warn "Use lowercase letters, digits and _ (starting with a letter or _)"
+    elif [[ $__nn_kind == db && -n $(psql_q "select 1 from pg_database where datname = $(sql_lit "$__nn_reply")") ]]; then
+      warn "Database $__nn_reply already exists"
+    elif [[ $__nn_kind == user ]] && role_exists "$__nn_reply"; then
+      warn "User $__nn_reply already exists"
+    else
+      break
+    fi
+  done
+  printf -v "$__nn_var" '%s' "$__nn_reply"
+}
+
+pick_role() {
+  local __pr_roles=() __pr_r __pr_list=()
+  mapfile -t __pr_roles < <(list_roles)
+  for __pr_r in "${__pr_roles[@]}"; do
+    if [[ -n $__pr_r && ! ($__pr_r == postgres && ${3-} == nopostgres) ]]; then __pr_list+=("$__pr_r"); fi
+  done
+  pick_item "$1" "$2" "${__pr_list[@]}"
+}
+
+DBS=""
+parse_databases() {
+  local list=${1//,/ } db
+  DBS=""
+  for db in $list; do
+    if [[ $db != all ]]; then
+      database_exists "$db" || die "Database $db does not exist"
+    fi
+    if [[ " $DBS " != *" $db "* ]]; then DBS+="${DBS:+ }$db"; fi
+  done
+  [[ -n $DBS ]] || die "No databases given"
+}
+
+ask_databases() {
+  local __adb_var=$1 __adb_reply __adb_db __adb_bad
+  info "Databases: $(user_databases | paste -sd' ' -)"
+  while :; do
+    ask __adb_reply "$2 (comma-separated, 'all' = every database)" "${3-}"
+    __adb_bad=""
+    for __adb_db in ${__adb_reply//,/ }; do
+      if [[ $__adb_db != all ]] && ! database_exists "$__adb_db"; then __adb_bad+=" $__adb_db"; fi
+    done
+    if [[ -z ${__adb_reply//[, ]/} ]]; then
+      warn "Enter at least one database"
+    elif [[ -n $__adb_bad ]]; then
+      warn "Unknown database:$__adb_bad"
+    else
+      break
+    fi
+  done
+  printf -v "$__adb_var" '%s' "$__adb_reply"
+}
+
+PW_SHOW=0
+ask_password() {
+  local __pw_pick="" __pw_a="" __pw_b=""
+  choose __pw_pick "Password" 1 "Generate a random one (shown once)" "Enter one"
+  if [[ $__pw_pick == 1 ]]; then
+    PW_SHOW=1
+    printf -v "$1" '%s' "$(random_secret 32)"
+    return 0
+  fi
+  while :; do
+    ask_secret __pw_a "New password"
+    ask_secret __pw_b "Repeat it"
+    if [[ $__pw_a != "$__pw_b" ]]; then
+      warn "The passwords differ"
+    elif ((${#__pw_a} < 12)); then
+      warn "Use at least 12 characters"
+    else
+      break
+    fi
+  done
+  printf -v "$1" '%s' "$__pw_a"
+}
+
+get_password() {
+  local __gp_pw=""
+  PW_SHOW=0
+  if [[ -n $2 ]]; then
+    IFS= read -r __gp_pw || true
+    [[ -n $__gp_pw ]] || die "No password on stdin"
+  elif (($3)); then
+    ask_password __gp_pw
+  else
+    __gp_pw=$(random_secret 32)
+    PW_SHOW=1
+  fi
+  printf -v "$1" '%s' "$__gp_pw"
+}
+
+show_credentials() {
+  local user=$1 pass=$2 db=$3 listen
+  if (($4 == 0)); then pass="<your password>"; fi
+  listen=$(pg_setting listen_addresses)
+  printf '\n  %sConnection — store the password now, it is not saved anywhere:%s\n' "$Y" "$N"
+  printf '    DB_CONNECTION=pgsql\n    DB_HOST=127.0.0.1\n    DB_PORT=%s\n    DB_DATABASE=%s\n    DB_USERNAME=%s\n    DB_PASSWORD=%s\n' \
+    "$PG_PORT" "$db" "$user" "$pass"
+  printf '    %spostgresql://%s:%s@127.0.0.1:%s/%s%s\n' "$D" "$user" "$pass" "$PG_PORT" "$db" "$N"
+  if [[ -z $listen || $listen == localhost || $listen == 127.0.0.1 ]]; then
+    info "PostgreSQL listens on localhost only — connect external tools through an SSH tunnel."
+  fi
+}
+
+role_database() {
+  psql_q "select coalesce(
+      (select datname from pg_database where datdba = r.oid and not datistemplate and datname <> 'postgres' order by 1 limit 1),
+      (select d.datname from pg_database d, aclexplode(d.datacl) a
+        where a.grantee = r.oid and a.privilege_type = 'CONNECT' order by 1 limit 1),
+      'postgres')
+    from pg_roles r where rolname = $(sql_lit "$1")"
+}
+
+create_role() {
+  psql_secret "create role $(sql_ident "$1") with login password $(sql_lit "$2")"
+}
+
+set_password() {
+  psql_secret "alter role $(sql_ident "$1") with password $(sql_lit "$2")"
+}
+
+create_database() {
+  local opts="" enc
+  enc=$(psql_q "select pg_encoding_to_char(encoding) from pg_database where datname = 'template1'")
+  if [[ $enc != UTF8 ]]; then
+    info "template1 uses $enc — creating $1 as UTF8 (C.UTF-8) from template0"
+    opts=" template template0 encoding 'UTF8' lc_collate 'C.UTF-8' lc_ctype 'C.UTF-8'"
+  fi
+  psql_q "create database $(sql_ident "$1") owner $(sql_ident "$2")$opts" >/dev/null
+}
+
+make_read_only() {
+  psql_q "alter role $(sql_ident "$1") set default_transaction_read_only = on" >/dev/null
+  if ((${PG_VERSION%%.*} < 15)); then
+    warn "PostgreSQL $PG_VERSION lets every user CREATE in schema public, read-only users included."
+    info "Per database, as its owner: REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT CREATE ON SCHEMA public TO <app user>;"
+  fi
+}
+
+grant_read_only() {
+  local role=$1 db=$2 r l
+  r=$(sql_ident "$role") l=$(sql_lit "$role")
+  if [[ $db == all ]]; then
+    ((${PG_VERSION%%.*} >= 14)) || die "'all' needs PostgreSQL 14+ (pg_read_all_data) — list the databases instead"
+    psql_q "grant pg_read_all_data to $r" >/dev/null
+    ok "$role can read every database (pg_read_all_data)"
+    return 0
+  fi
+  psql_script "$db" >/dev/null <<SQL
+grant connect on database $(sql_ident "$db") to $r;
+select format('grant usage on schema %I to %I', nspname, $l),
+       format('grant select on all tables in schema %I to %I', nspname, $l),
+       format('grant select on all sequences in schema %I to %I', nspname, $l)
+  from pg_namespace where $USER_SCHEMAS \gexec
+select format('alter default privileges for role %I grant select on tables to %I', rolname, $l),
+       format('alter default privileges for role %I grant select on sequences to %I', rolname, $l),
+       format('alter default privileges for role %I grant usage on schemas to %I', rolname, $l)
+  from pg_roles
+ where rolname !~ '^pg_' and rolname <> $l and oid in (
+       select datdba from pg_database where datname = current_database()
+       union select nspowner from pg_namespace where $USER_SCHEMAS
+       union select c.relowner from pg_class c join pg_namespace on pg_namespace.oid = c.relnamespace
+              where $USER_SCHEMAS and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S')) \gexec
+SQL
+  ok "$role can read $db"
+}
+
+revoke_read_only() {
+  local role=$1 db=$2 r l
+  r=$(sql_ident "$role") l=$(sql_lit "$role")
+  if [[ $db == all ]]; then
+    if ((${PG_VERSION%%.*} >= 14)); then psql_q "revoke pg_read_all_data from $r" >/dev/null; fi
+    ok "$role no longer reads every database"
+    return 0
+  fi
+  psql_script "$db" >/dev/null <<SQL
+revoke connect on database $(sql_ident "$db") from $r;
+select format('revoke all on all tables in schema %I from %I', nspname, $l),
+       format('revoke all on all sequences in schema %I from %I', nspname, $l),
+       format('revoke all on schema %I from %I', nspname, $l)
+  from pg_namespace where $USER_SCHEMAS \gexec
+select distinct format('alter default privileges for role %I%s revoke all on %s from %I',
+         pg_get_userbyid(d.defaclrole),
+         case when d.defaclnamespace <> 0 then format(' in schema %I', n.nspname) else '' end,
+         case d.defaclobjtype when 'r' then 'tables' when 'S' then 'sequences' when 'f' then 'functions'
+                              when 'T' then 'types' when 'n' then 'schemas' end,
+         $l)
+  from pg_default_acl d left join pg_namespace n on n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+ where a.grantee = (select oid from pg_roles where rolname = $l) \gexec
+SQL
+  ok "$role can no longer read $db"
+}
+
+drop_role() {
+  local r dbs=() db
+  r=$(sql_ident "$1")
+  psql_q "select pg_terminate_backend(pid) from pg_stat_activity where usename = $(sql_lit "$1")" >/dev/null
+  mapfile -t dbs < <(list_databases)
+  for db in "${dbs[@]}"; do
+    printf '%s\n' "reassign owned by $r to current_user;" "drop owned by $r;" | psql_script "$db" >/dev/null
+  done
+  psql_q "drop role $r" >/dev/null
+}
+
+roles_info() {
+  psql_q "select r.rolname,
+      coalesce(nullif(concat_ws(', ',
+        case when r.rolsuper then 'superuser' end,
+        case when s.setconfig @> array['default_transaction_read_only=on'] then 'read-only' end,
+        case when r.rolcreatedb and not r.rolsuper then 'createdb' end,
+        case when not r.rolcanlogin then 'no login' end), ''), '-'),
+      coalesce((select string_agg(datname, ', ' order by datname) from pg_database
+                 where datdba = r.oid and not datistemplate), '-'),
+      coalesce(nullif(concat_ws(', ',
+        case when not r.rolsuper and pg_has_role(r.oid, (select oid from pg_roles where rolname = 'pg_read_all_data'), 'member')
+             then 'all databases' end,
+        (select string_agg(d.datname, ', ' order by d.datname) from pg_database d, aclexplode(d.datacl) a
+          where a.grantee = r.oid and a.privilege_type = 'CONNECT' and d.datdba <> r.oid)), ''), '-'),
+      (select count(*) from pg_stat_activity where usesysid = r.oid)
+    from pg_roles r left join pg_db_role_setting s on s.setrole = r.oid and s.setdatabase = 0
+    where r.rolname !~ '^pg_' order by r.rolname"
+}
+
+user_list() {
+  local name flags owns reads sessions apps line rows=()
+  header "Users · PostgreSQL $PG_VERSION/$PG_CLUSTER"
+  mapfile -t rows < <(roles_info)
+  for line in "${rows[@]}"; do
+    IFS=$'\t' read -r name flags owns reads sessions <<<"$line"
+    line=""
+    if [[ $flags != - ]]; then line+=" · $flags"; fi
+    if [[ $owns != - ]]; then line+=" · owns $owns"; fi
+    if [[ $reads != - ]]; then line+=" · reads $reads"; fi
+    if ((sessions)); then line+=" · $sessions sessions"; fi
+    apps=$(apps_using 5 "$name")
+    if [[ -n $apps ]]; then line+=" · $(dim "app: $apps")"; fi
+    printf '  %s%-20s%s %s\n' "$B" "$name" "$N" "${line# · }"
+  done
+}
+
+db_list() {
+  local name size owner sessions readers apps rows=() line
+  header "Databases · PostgreSQL $PG_VERSION/$PG_CLUSTER"
+  mapfile -t rows < <(psql_q "select d.datname, pg_size_pretty(pg_database_size(d.oid)), pg_get_userbyid(d.datdba),
+      (select count(*) from pg_stat_activity a where a.datid = d.oid),
+      coalesce((select string_agg(r.rolname, ', ' order by r.rolname) from aclexplode(d.datacl) a
+                  join pg_roles r on r.oid = a.grantee
+                 where a.privilege_type = 'CONNECT' and a.grantee <> d.datdba), '-')
+    from pg_database d where d.datallowconn and not d.datistemplate order by d.datname")
+  printf '  %s%-24s %9s  %-16s %8s  %s%s\n' "$D" Database Size Owner Sessions "Read-only users · apps" "$N"
+  for line in "${rows[@]}"; do
+    IFS=$'\t' read -r name size owner sessions readers <<<"$line"
+    apps=$(apps_using 4 "$name")
+    if [[ $readers == - ]]; then readers=""; fi
+    if [[ -n $apps ]]; then readers+="${readers:+ · }$(dim "app: $apps")"; fi
+    printf '  %-24s %9s  %-16s %8s  %s\n' "$name" "$size" "$owner" "$sessions" "$readers"
   done
 }
 
@@ -598,6 +1248,36 @@ version_ge() {
   [[ $(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1) == "$2" ]]
 }
 
+random_secret() {
+  head -c 48 /dev/urandom | base64 | tr -d '\n/+=' | head -c "${1:-32}"
+}
+
+menu_items() {
+  while (($# >= 3)); do
+    printf '  %s%s)%s %-26s %s%s%s\n' "$B" "$1" "$N" "$2" "$D" "$3" "$N"
+    shift 3
+  done
+}
+
+menu_choice() {
+  local __mc_reply="" __mc_rc=0
+  printf 'Choose %s(ESC = back)%s: ' "$D" "$N"
+  read_input __mc_reply || __mc_rc=$?
+  if ((__mc_rc == 1)); then return 1; fi
+  if ((__mc_rc == 2)); then __mc_reply=b; fi
+  printf -v "$1" '%s' "$__mc_reply"
+}
+
+run_cmd() {
+  local rc=0
+  PGM_CLUSTER="$PG_VERSION/$PG_CLUSTER" "$SELF" "$@" || rc=$?
+  if ((rc == 130)); then
+    info "Cancelled — back to the menu"
+  elif ((rc)); then
+    warn "${*:1:2} ended with exit code $rc"
+  fi
+}
+
 info() { printf '%s▸%s %s\n' "$C" "$N" "$*"; }
 ok() { printf '%s✓%s %s\n' "$G" "$N" "$*"; }
 warn() { printf '%s!%s %s\n' "$Y" "$N" "$*"; }
@@ -757,6 +1437,10 @@ detect_cluster() {
   local rows=() labels=() r sel="" pick v c p s
   mapfile -t rows < <(pg_lsclusters -h 2>/dev/null | awk '{print $1" "$2" "$3" "$4" "$6}')
   ((${#rows[@]})) || die "No PostgreSQL cluster found (pg_lsclusters is empty)"
+  # Child processes of the menu inherit the cluster picked there
+  if [[ -z $PG_VERSION && ${PGM_CLUSTER-} == */* ]]; then
+    PG_VERSION=${PGM_CLUSTER%%/*} PG_CLUSTER=${PGM_CLUSTER#*/}
+  fi
   if [[ -n $PG_VERSION && -n $PG_CLUSTER ]]; then
     for r in "${rows[@]}"; do
       if [[ $r == "$PG_VERSION $PG_CLUSTER "* ]]; then sel=$r; fi
@@ -810,7 +1494,7 @@ list_databases() {
 }
 
 database_exists() {
-  list_databases | grep -x "$1" >/dev/null
+  list_databases | grep -Fx -- "$1" >/dev/null
 }
 
 ensure_conf_d() {
@@ -850,8 +1534,94 @@ check_overrides() {
   done
 }
 
+require_pg() {
+  pg_ready || die "PostgreSQL $PG_VERSION/$PG_CLUSTER is not running"
+}
+
+sql_ident() { printf '"%s"' "${1//\"/\"\"}"; }
+sql_lit() { printf "'%s'" "${1//\'/\'\'}"; }
+
+psql_script() {
+  as_postgres psql -XAtq -v ON_ERROR_STOP=1 -p "$PG_PORT" -d "${1:-postgres}" -F $'\t'
+}
+
+psql_secret() {
+  printf '%s\n' "set log_statement = 'none';" "set log_min_duration_statement = -1;" \
+    "set log_min_error_statement = 'panic';" "set pg_stat_statements.track_utility = off;" "$1;" |
+    psql_script >/dev/null
+}
+
+role_exists() {
+  [[ -n $(psql_q "select 1 from pg_roles where rolname = $(sql_lit "$1")") ]]
+}
+
+valid_name() {
+  [[ $1 =~ ^[a-z_][a-z0-9_]{0,62}$ ]]
+}
+
+read_input() {
+  local __ri_line="" __ri_rc=0
+  if [[ ! -t 0 ]]; then
+    IFS= read -r __ri_line || [[ -n $__ri_line ]] || return 1
+    if [[ $__ri_line == *$'\e'* ]]; then return 2; fi
+    printf -v "$1" '%s' "$__ri_line"
+    return 0
+  fi
+  local __ri_tty
+  __ri_tty=$(stty -g)
+  # echo off for the whole prompt (pasted secrets never show), restored on Ctrl-C too
+  trap 'stty "$__ri_tty"; printf "\n"; exit 130' INT TERM
+  stty -echo -icanon min 1 time 0
+  read_keys __ri_line "${2-}" || __ri_rc=$?
+  stty "$__ri_tty"
+  trap - INT TERM
+  printf '\n'
+  if ((__ri_rc)); then return "$__ri_rc"; fi
+  printf -v "$1" '%s' "$__ri_line"
+}
+
+read_keys() {
+  local __rk_line="" __rk_c="" __rk_rest=""
+  while :; do
+    IFS= read -rn1 __rk_c || return 1
+    case $__rk_c in
+      '') break ;;
+      $'\e')
+        __rk_rest=""
+        IFS= read -rn5 -t 0.05 __rk_rest || true
+        if [[ -z $__rk_rest ]]; then return 2; fi
+        ;;
+      $'\004')
+        if [[ -z $__rk_line ]]; then return 1; fi
+        ;;
+      $'\177' | $'\b')
+        if [[ -n $__rk_line ]]; then
+          __rk_line=${__rk_line%?}
+          if [[ -z $2 ]]; then printf '\b \b'; fi
+        fi
+        ;;
+      [[:cntrl:]]) ;;
+      *)
+        __rk_line+=$__rk_c
+        if [[ -z $2 ]]; then printf '%s' "$__rk_c"; fi
+        ;;
+    esac
+  done
+  printf -v "$1" '%s' "$__rk_line"
+}
+
+cancel() {
+  printf '%s↩ cancelled%s\n' "$D" "$N"
+  exit 130
+}
+
 read_line() {
-  IFS= read -r "$1" || die "No input (stdin closed)"
+  local __rl_rc=0
+  read_input "$@" || __rl_rc=$?
+  case $__rl_rc in
+    1) die "No input (stdin closed)" ;;
+    2) cancel ;;
+  esac
 }
 
 ask() {
@@ -869,8 +1639,7 @@ ask_secret() {
   local __sec_var=$1 __sec_prompt=$2 __sec_cur=${3-} __sec_reply __sec_hint=""
   if [[ -n $__sec_cur ]]; then __sec_hint=" ${D}[keep current]${N}"; fi
   printf '%s%s: ' "$__sec_prompt" "$__sec_hint"
-  IFS= read -rs __sec_reply || die "No input (stdin closed)"
-  printf '\n'
+  read_line __sec_reply secret
   printf -v "$__sec_var" '%s' "${__sec_reply:-$__sec_cur}"
 }
 
@@ -906,6 +1675,29 @@ ask_int() {
     warn "Enter a number between $__int_min and $__int_max"
   done
   printf -v "$__int_var" '%s' "$__int_reply"
+}
+
+pick_item() {
+  local __pi_var=$1 __pi_prompt=$2 __pi_reply="" __pi_i=1 __pi_it
+  shift 2
+  (($#)) || die "Nothing to choose from"
+  local __pi_items=("$@")
+  for __pi_it in "$@"; do
+    printf '  %s%d)%s %s\n' "$B" "$__pi_i" "$N" "$__pi_it"
+    __pi_i=$((__pi_i + 1))
+  done
+  while :; do
+    ask __pi_reply "$__pi_prompt (number or name)"
+    if [[ $__pi_reply =~ ^[0-9]+$ ]] && ((__pi_reply >= 1 && __pi_reply <= $#)); then
+      __pi_reply=${__pi_items[__pi_reply - 1]}
+      break
+    fi
+    for __pi_it in "$@"; do
+      if [[ $__pi_it == "$__pi_reply" ]]; then break 2; fi
+    done
+    warn "Pick 1-$# or a name from the list"
+  done
+  printf -v "$__pi_var" '%s' "$__pi_reply"
 }
 
 restore_into_dir() {
@@ -1057,7 +1849,7 @@ prompt_cipher() {
     [[ -n $CIPHER_PASS ]] || die "Passphrase is required"
     return 0
   fi
-  CIPHER_PASS=$(head -c 48 /dev/urandom | base64 | tr -d '\n/+=' | head -c 64)
+  CIPHER_PASS=$(random_secret 64)
   printf '\n  %s┌──────────────────────────────────────────────────────────────────────────┐%s\n' "$Y" "$N"
   printf '  %s│%s %-73s%s│%s\n' "$Y" "$N" "Encryption passphrase — store it in your password manager NOW." "$Y" "$N"
   printf '  %s│%s %-73s%s│%s\n' "$Y" "$N" "Without it the backups cannot be restored. It is also kept in" "$Y" "$N"
@@ -1154,6 +1946,7 @@ show_status() {
 
   if pg_ready; then
     status_postgres
+    status_users
     status_apps
     status_archiving
   else
@@ -1268,6 +2061,22 @@ status_backups() {
   row Schedule "$(schedule_line)"
 }
 
+status_users() {
+  local name flags out="" n=0 line rows=()
+  mapfile -t rows < <(roles_info)
+  for line in "${rows[@]}"; do
+    IFS=$'\t' read -r name flags _ <<<"$line"
+    [[ -n $name ]] || continue
+    n=$((n + 1))
+    if ((n > 8)); then continue; fi
+    flags=${flags//createdb/}
+    flags=$(sed -E 's/(, )+/, /g; s/^, |, $//g' <<<"${flags#-}")
+    out+="${out:+, }$name${flags:+ $(dim "($flags)")}"
+  done
+  if ((n > 8)); then out+=" … +$((n - 8))"; fi
+  row Users "$out"
+}
+
 require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root: sudo $SELF ${action:-}"
 }
@@ -1347,44 +2156,68 @@ ensure_timescale_repo() {
 
 postgres_manager_menu_command() {
 
-  show_status
-  while :; do
-    printf '\n'
-    if ((CONFIGURED)); then
-      printf '  %s1)%s Backups: list        %s2)%s Run backup now     %s3)%s Edit settings\n' "$B" "$N" "$B" "$N" "$B" "$N"
-      printf '  %s4)%s Restore / PITR       %s5)%s Restore drill      %s6)%s Check archiving\n' "$B" "$N" "$B" "$N" "$B" "$N"
-      printf '  %s7)%s Extensions           %s8)%s Re-run setup       %s9)%s Refresh status\n' "$B" "$N" "$B" "$N" "$B" "$N"
-    else
-      printf '  %s1)%s Set up backups (pgBackRest + WAL archiving)\n' "$B" "$N"
-      printf '  %s7)%s Extensions    %s9)%s Refresh status\n' "$B" "$N" "$B" "$N"
-    fi
-    printf '  %sq)%s Quit\n' "$B" "$N"
-    printf 'Choose: '
-    IFS= read -r choice || break
-    if ((CONFIGURED == 0)) && [[ $choice =~ ^([1-6]|8)$ ]]; then choice=8; fi
-
-    cmd=()
-    case $choice in
-      1) cmd=(list) ;;
-      2)
-        ask type "Type (full/diff/incr)" diff
-        cmd=(backup "$type")
-        ;;
-      3) cmd=(edit) ;;
-      4) cmd=(restore) ;;
-      5) cmd=(verify) ;;
-      6) cmd=(check) ;;
-      7) cmd=(extensions) ;;
-      8) cmd=(setup) ;;
-      9) cmd=(status) ;;
-      q | Q | '') break ;;
-      *) warn "Unknown choice" ;;
-    esac
-    if ((${#cmd[@]})); then
-      "$SELF" "${cmd[@]}" || warn "${cmd[0]} ended with exit code $?"
+  backups_menu() {
+    local pick="" type=""
+    while :; do
+      if ((CONFIGURED)); then
+        header "Backups & restore · $(repo_label)"
+        menu_items \
+          1 "List backups" "backup sets, sizes and the point-in-time recovery window" \
+          2 "Run backup now" "full = everything, diff = changes since the last full, incr = since the last backup" \
+          3 "Restore / point in time" "into a separate directory (safe) or over this cluster, to any second in the window" \
+          4 "Restore drill" "proves the backups work: restores the latest into a temp dir, starts it, compares, removes it" \
+          5 "Check archiving" "pgBackRest check: WAL archiving and repository access" \
+          6 "Settings" "schedule, retention, RPO, performance, repository, heartbeat, passphrase" \
+          7 "Re-run setup" "reconfigure pgBackRest and WAL archiving from scratch" \
+          b "Back" ""
+      else
+        header "Backups & restore · not configured"
+        menu_items \
+          1 "Set up backups" "pgBackRest + continuous WAL archiving to Cloudflare R2, S3 or a local directory" \
+          b "Back" ""
+      fi
+      menu_choice pick || return 0
+      if ((CONFIGURED == 0)) && [[ $pick == 1 ]]; then pick=7; fi
+      case $pick in
+        1) run_cmd list ;;
+        2)
+          ask type "Type (full/diff/incr)" diff
+          run_cmd backup "$type"
+          ;;
+        3) run_cmd restore ;;
+        4) run_cmd verify ;;
+        5) run_cmd check ;;
+        6) run_cmd edit ;;
+        7) run_cmd setup ;;
+        b | B | q | Q | '') return 0 ;;
+        *) warn "Unknown choice" ;;
+      esac
       CONFIGURED=0
       load_config
-    fi
+    done
+  }
+
+  show_status
+  choice=""
+  while :; do
+    header "PostgreSQL $PG_VERSION/$PG_CLUSTER"
+    menu_items \
+      1 "Databases" "list, create and drop databases" \
+      2 "Users & access" "create users, read-only access, passwords, drop users" \
+      3 "Extensions" "PostGIS, pgvector, TimescaleDB, pg_cron, pg_stat_statements" \
+      4 "Backups & restore" "pgBackRest backups, point-in-time restore, restore drill" \
+      s "Status" "refresh the dashboard" \
+      q "Quit" ""
+    menu_choice choice || break
+    case $choice in
+      1) run_cmd db ;;
+      2) run_cmd user ;;
+      3) run_cmd extensions ;;
+      4) backups_menu ;;
+      s | S) run_cmd status ;;
+      q | Q | b | B | '') break ;;
+      *) warn "Unknown choice" ;;
+    esac
   done
 
 }
@@ -1392,6 +2225,360 @@ postgres_manager_menu_command() {
 postgres_manager_status_command() {
 
   show_status
+
+}
+
+postgres_manager_db_menu_command() {
+
+  require_pg
+  choice=""
+  while :; do
+    db_list
+    printf '\n'
+    menu_items \
+      1 "Create database" "UTF8, owned by a new or existing user" \
+      2 "Drop database" "terminates its sessions; asks you to type the name" \
+      3 "Users & access" "users, read-only access, passwords" \
+      4 "Extensions" "install and enable extensions per database" \
+      b "Back" ""
+    menu_choice choice || break
+    case $choice in
+      1) run_cmd db create ;;
+      2) run_cmd db drop ;;
+      3) run_cmd user ;;
+      4) run_cmd extensions ;;
+      b | B | q | Q | '') break ;;
+      *) warn "Unknown choice" ;;
+    esac
+  done
+
+}
+
+postgres_manager_db_list_command() {
+
+  require_pg
+  db_list
+
+}
+
+postgres_manager_db_create_command() {
+
+  require_pg
+  name=${args[name]-}
+  owner=${args[--owner]-}
+  interactive=0
+  if [[ -z $name ]]; then
+    interactive=1
+    header "Create database"
+    ask_new_name name "Database name" db
+    ask owner "Owner user (created if missing)" "$name"
+  fi
+  owner=${owner:-$name}
+  valid_name "$name" || die "Invalid database name '$name' (lowercase letters, digits, _)"
+  if [[ -n $(psql_q "select 1 from pg_database where datname = $(sql_lit "$name")") ]]; then die "Database $name already exists"; fi
+
+  password=""
+  if ! role_exists "$owner"; then
+    valid_name "$owner" || die "Invalid user name '$owner' (lowercase letters, digits, _)"
+    get_password password "" "$interactive"
+    create_role "$owner" "$password"
+    ok "Created user $owner"
+  fi
+  create_database "$name" "$owner"
+  ok "Created database $name (owner $owner)"
+  if [[ -n $password ]]; then show_credentials "$owner" "$password" "$name" "$PW_SHOW"; fi
+
+}
+
+postgres_manager_db_drop_command() {
+
+  require_pg
+  name=${args[name]-}
+  yes=${args[--yes]-}
+  if [[ -z $name ]]; then
+    dbs=()
+    mapfile -t dbs < <(user_databases)
+    header "Drop database"
+    pick_item name "Database to drop" "${dbs[@]}"
+  fi
+  [[ $name != postgres ]] || die "Refusing to drop the maintenance database postgres"
+  database_exists "$name" || die "Database $name does not exist"
+
+  IFS=$'\t' read -r size owner sessions < <(psql_q "select pg_size_pretty(pg_database_size(oid)), pg_get_userbyid(datdba),
+    (select count(*) from pg_stat_activity a where a.datid = d.oid) from pg_database d where datname = $(sql_lit "$name")")
+  apps=$(apps_using 4 "$name")
+  warn "Drop database $name ($size, owner $owner, $sessions sessions — they are terminated)"
+  if [[ -n $apps ]]; then warn "Used by app: $apps"; fi
+  if ((CONFIGURED)); then
+    info "It stays restorable from the backups within the retention window (restore --target-dir)."
+  else
+    warn "Backups are not configured — this cannot be undone."
+  fi
+  if [[ -z $yes ]]; then
+    typed=""
+    ask typed "Type '$name' to drop it"
+    [[ $typed == "$name" ]] || die "Aborted"
+  fi
+  psql_q "drop database $(sql_ident "$name") with (force)" >/dev/null
+  ok "Dropped database $name"
+
+  if [[ -z $yes && $owner != postgres && -z $(apps_using 5 "$owner") ]] &&
+    [[ -z $(psql_q "select 1 from pg_roles r where rolname = $(sql_lit "$owner")
+                    and (rolsuper or exists (select 1 from pg_database where datdba = r.oid))") ]] &&
+    confirm "Also drop its owner $owner (owns no other database)?" N; then
+    drop_role "$owner"
+    ok "Dropped user $owner"
+  fi
+
+}
+
+postgres_manager_user_menu_command() {
+
+  require_pg
+  choice=""
+  while :; do
+    user_list
+    printf '\n'
+    menu_items \
+      1 "Create user" "read-only, owner of a new database, or login only" \
+      2 "Change password" "generated or typed; shown once" \
+      3 "Grant read-only access" "SELECT on all tables of databases, incl. tables created later" \
+      4 "Revoke read-only access" "remove read access from databases" \
+      5 "Drop user" "ends its sessions; refuses while it owns databases" \
+      b "Back" ""
+    menu_choice choice || break
+    case $choice in
+      1) run_cmd user create ;;
+      2) run_cmd user password ;;
+      3) run_cmd user grant ;;
+      4) run_cmd user revoke ;;
+      5) run_cmd user drop ;;
+      b | B | q | Q | '') break ;;
+      *) warn "Unknown choice" ;;
+    esac
+  done
+
+}
+
+postgres_manager_user_list_command() {
+
+  require_pg
+  user_list
+
+}
+
+postgres_manager_user_create_command() {
+
+  require_pg
+  name=${args[name]-}
+  read_only=${args[--read-only]-}
+  from_stdin=${args[--password-stdin]-}
+  new_db=""
+  interactive=0
+  if [[ -z $name ]]; then
+    interactive=1
+    header "Create user"
+    ask_new_name name "User name" user
+    kind=""
+    choose kind "Kind" 1 "Read-only (SELECT on chosen databases, incl. future tables)" \
+      "Owner of a new database (full rights there)" "Login only (no privileges)"
+    case $kind in
+      1) ask_databases read_only "Read-only on" "$(app_databases)" ;;
+      2) ask_new_name new_db "Database name" db "$name" ;;
+    esac
+  fi
+  valid_name "$name" || die "Invalid user name '$name' (lowercase letters, digits, _)"
+  if role_exists "$name"; then die "User $name already exists"; fi
+  if [[ -n $read_only ]]; then parse_databases "$read_only"; fi
+
+  password=""
+  get_password password "$from_stdin" "$interactive"
+  create_role "$name" "$password"
+  ok "Created user $name"
+  if [[ -n $read_only ]]; then
+    make_read_only "$name"
+    for db in $DBS; do grant_read_only "$name" "$db"; done
+  fi
+  if [[ -n $new_db ]]; then
+    create_database "$new_db" "$name"
+    ok "Created database $new_db (owner $name)"
+  fi
+  show_credentials "$name" "$password" "$(role_database "$name")" "$PW_SHOW"
+
+}
+
+postgres_manager_user_password_command() {
+
+  require_pg
+  name=${args[name]-}
+  from_stdin=${args[--password-stdin]-}
+  yes=${args[--yes]-}
+  interactive=0
+  if [[ -z $name ]]; then
+    interactive=1
+    header "Change password"
+    pick_role name "User"
+  fi
+  role_exists "$name" || die "User $name does not exist"
+  apps=$(apps_using 5 "$name")
+  if [[ -n $apps ]]; then
+    warn "$name is used by app: $apps — update DB_PASSWORD in its .env (and re-cache the config) right after."
+    if [[ -z $yes ]] && ! confirm "Change the password anyway?" N; then die "Aborted"; fi
+  fi
+  password=""
+  get_password password "$from_stdin" "$interactive"
+  set_password "$name" "$password"
+  ok "Password of $name changed"
+  if ((PW_SHOW)); then show_credentials "$name" "$password" "$(role_database "$name")" 1; fi
+
+}
+
+postgres_manager_user_grant_command() {
+
+  require_pg
+  name=${args[name]-}
+  databases=${args[databases]-}
+  if [[ -z $name ]]; then
+    header "Grant read-only access"
+    pick_role name "User" nopostgres
+  fi
+  role_exists "$name" || die "User $name does not exist"
+  if [[ -n $(psql_q "select 1 from pg_roles where rolsuper and rolname = $(sql_lit "$name")") ]]; then
+    die "$name is a superuser and can read everything already"
+  fi
+  if [[ -z $databases ]]; then ask_databases databases "Read-only on" "$(app_databases)"; fi
+  parse_databases "$databases"
+  for db in $DBS; do grant_read_only "$name" "$db"; done
+  info "Tables created later by other roles than the current owners: run this again."
+
+}
+
+postgres_manager_user_revoke_command() {
+
+  require_pg
+  name=${args[name]-}
+  databases=${args[databases]-}
+  if [[ -z $name ]]; then
+    header "Revoke read-only access"
+    pick_role name "User" nopostgres
+  fi
+  role_exists "$name" || die "User $name does not exist"
+  if [[ -z $databases ]]; then
+    current=""
+    IFS=$'\t' read -r _ _ _ current _ < <(roles_info | awk -F'\t' -v r="$name" '$1 == r')
+    if [[ $current == "all databases"* ]]; then current="all${current#all databases}"; fi
+    if [[ $current == - ]]; then current=""; fi
+    info "$name reads: ${current:-nothing}"
+    ask_databases databases "Revoke on" "$current"
+  fi
+  parse_databases "$databases"
+  for db in $DBS; do revoke_read_only "$name" "$db"; done
+
+}
+
+postgres_manager_user_drop_command() {
+
+  require_pg
+  name=${args[name]-}
+  yes=${args[--yes]-}
+  if [[ -z $name ]]; then
+    header "Drop user"
+    pick_role name "User to drop" nopostgres
+  fi
+  [[ $name != postgres ]] || die "Refusing to drop postgres"
+  role_exists "$name" || die "User $name does not exist"
+  owned=$(psql_q "select string_agg(datname, ', ') from pg_database where datdba = (select oid from pg_roles where rolname = $(sql_lit "$name"))")
+  [[ -z $owned ]] || die "$name owns $owned — drop those databases first (postgres-manager db drop)"
+  apps=$(apps_using 5 "$name")
+  warn "Drop user $name (its sessions are terminated; objects it owns in other databases go to postgres)"
+  if [[ -n $apps ]]; then warn "Used by app: $apps"; fi
+  if [[ -z $yes ]]; then
+    typed=""
+    ask typed "Type '$name' to drop it"
+    [[ $typed == "$name" ]] || die "Aborted"
+  fi
+  drop_role "$name"
+  ok "Dropped user $name"
+
+}
+
+postgres_manager_extensions_command() {
+
+  require_pg
+  preload=$(pg_setting shared_preload_libraries)
+
+  header "Extensions · PostgreSQL $PG_VERSION/$PG_CLUSTER"
+  i=1
+  for key in "${EXTENSIONS[@]}"; do
+    printf '  %s%d)%s %-52s %s\n' "$B" "$i" "$N" "$(ext_label "$key")" "$(ext_state "$key" "$preload")"
+    i=$((i + 1))
+  done
+  ask selection "Install/enable which (e.g. \"1 3\", empty = cancel)" ""
+  [[ -n $selection ]] || exit 0
+  chosen=()
+  for n in $selection; do
+    [[ $n =~ ^[1-5]$ ]] || die "Invalid choice: $n"
+    chosen+=("${EXTENSIONS[n - 1]}")
+  done
+
+  header "Packages"
+  for key in "${chosen[@]}"; do ensure_ext_package "$key"; done
+  ok "Packages ready"
+
+  new_preload=$preload
+  restart=0
+  for key in "${chosen[@]}"; do
+    if ext_needs_preload "$key" && ! preload_has "$new_preload" "$key"; then
+      new_preload="${new_preload:+$new_preload,}$key"
+      restart=1
+    fi
+  done
+  default_dbs=$(app_databases)
+  cron_db=$(pg_setting cron.database_name)
+  if [[ " ${chosen[*]} " == *" pg_cron "* ]]; then
+    cron_db_new=""
+    ask cron_db_new "Database for pg_cron jobs (cron.database_name)" "${cron_db:-${default_dbs%% *}}"
+    if [[ $cron_db_new != "$cron_db" ]]; then restart=1; fi
+    cron_db=$cron_db_new
+  fi
+  if ((restart)); then
+    write_pg_snippet "$PG_SNIPPET_EXTENSIONS" "# Managed by postgres-manager — extension settings.
+  shared_preload_libraries = '$new_preload'${cron_db:+
+  cron.database_name = '$cron_db'}"
+    warn "shared_preload_libraries changed ($new_preload) — needs a PostgreSQL restart."
+    if confirm "Restart PostgreSQL $PG_VERSION/$PG_CLUSTER now?" Y; then
+      pg_restart
+    else
+      warn "Restart later, then run extensions again to CREATE EXTENSION the preloaded ones."
+    fi
+  fi
+
+  header "Enable in databases"
+  info "Databases: $(list_databases | tr '\n' ' ')"
+  ask targets "CREATE EXTENSION in which databases (space-separated, 'all', '-' = skip)" "${default_dbs:--}"
+  case $targets in
+    -) targets="" ;;
+    all) targets=$(list_databases | grep -vx postgres | tr '\n' ' ') ;;
+  esac
+  preload=$(pg_setting shared_preload_libraries)
+  for key in "${chosen[@]}"; do
+    sql=$(ext_sql_name "$key")
+    if ext_needs_preload "$key" && ! preload_has "$preload" "$key"; then
+      warn "$key is not preloaded yet (restart pending) — skipped"
+      continue
+    fi
+    key_targets=$targets
+    if [[ $key == pg_cron ]]; then key_targets=$(pg_setting cron.database_name); fi
+    for db in $key_targets; do
+      if ! database_exists "$db"; then
+        warn "Database $db does not exist — skipped"
+      elif psql_q "create extension if not exists \"$sql\"" "$db" >/dev/null 2>&1; then
+        ok "$sql enabled in $db"
+      else
+        warn "Could not create $sql in $db"
+      fi
+    done
+  done
 
 }
 
@@ -1671,86 +2858,6 @@ postgres_manager_restore_command() {
 
 }
 
-postgres_manager_extensions_command() {
-
-  pg_ready || die "PostgreSQL $PG_VERSION/$PG_CLUSTER is not running"
-  preload=$(pg_setting shared_preload_libraries)
-
-  header "Extensions · PostgreSQL $PG_VERSION/$PG_CLUSTER"
-  i=1
-  for key in "${EXTENSIONS[@]}"; do
-    printf '  %s%d)%s %-52s %s\n' "$B" "$i" "$N" "$(ext_label "$key")" "$(ext_state "$key" "$preload")"
-    i=$((i + 1))
-  done
-  ask selection "Install/enable which (e.g. \"1 3\", empty = cancel)" ""
-  [[ -n $selection ]] || exit 0
-  chosen=()
-  for n in $selection; do
-    [[ $n =~ ^[1-5]$ ]] || die "Invalid choice: $n"
-    chosen+=("${EXTENSIONS[n - 1]}")
-  done
-
-  header "Packages"
-  for key in "${chosen[@]}"; do ensure_ext_package "$key"; done
-  ok "Packages ready"
-
-  new_preload=$preload
-  restart=0
-  for key in "${chosen[@]}"; do
-    if ext_needs_preload "$key" && ! preload_has "$new_preload" "$key"; then
-      new_preload="${new_preload:+$new_preload,}$key"
-      restart=1
-    fi
-  done
-  default_dbs=$(app_databases)
-  cron_db=$(pg_setting cron.database_name)
-  if [[ " ${chosen[*]} " == *" pg_cron "* ]]; then
-    cron_db_new=""
-    ask cron_db_new "Database for pg_cron jobs (cron.database_name)" "${cron_db:-${default_dbs%% *}}"
-    if [[ $cron_db_new != "$cron_db" ]]; then restart=1; fi
-    cron_db=$cron_db_new
-  fi
-  if ((restart)); then
-    write_pg_snippet "$PG_SNIPPET_EXTENSIONS" "# Managed by postgres-manager — extension settings.
-  shared_preload_libraries = '$new_preload'${cron_db:+
-  cron.database_name = '$cron_db'}"
-    warn "shared_preload_libraries changed ($new_preload) — needs a PostgreSQL restart."
-    if confirm "Restart PostgreSQL $PG_VERSION/$PG_CLUSTER now?" Y; then
-      pg_restart
-    else
-      warn "Restart later, then run extensions again to CREATE EXTENSION the preloaded ones."
-    fi
-  fi
-
-  header "Enable in databases"
-  info "Databases: $(list_databases | tr '\n' ' ')"
-  ask targets "CREATE EXTENSION in which databases (space-separated, 'all', '-' = skip)" "${default_dbs:--}"
-  case $targets in
-    -) targets="" ;;
-    all) targets=$(list_databases | grep -vx postgres | tr '\n' ' ') ;;
-  esac
-  preload=$(pg_setting shared_preload_libraries)
-  for key in "${chosen[@]}"; do
-    sql=$(ext_sql_name "$key")
-    if ext_needs_preload "$key" && ! preload_has "$preload" "$key"; then
-      warn "$key is not preloaded yet (restart pending) — skipped"
-      continue
-    fi
-    key_targets=$targets
-    if [[ $key == pg_cron ]]; then key_targets=$(pg_setting cron.database_name); fi
-    for db in $key_targets; do
-      if ! database_exists "$db"; then
-        warn "Database $db does not exist — skipped"
-      elif psql_q "create extension if not exists \"$sql\"" "$db" >/dev/null 2>&1; then
-        ok "$sql enabled in $db"
-      else
-        warn "Could not create $sql in $db"
-      fi
-    done
-  done
-
-}
-
 postgres_manager_self_update_command() {
 
   tmp=$(mktemp)
@@ -1829,6 +2936,27 @@ parse_requirements() {
       shift $#
       ;;
 
+    db | databases)
+      action="db"
+      shift
+      postgres_manager_db_parse_requirements "$@"
+      shift $#
+      ;;
+
+    user | users)
+      action="user"
+      shift
+      postgres_manager_user_parse_requirements "$@"
+      shift $#
+      ;;
+
+    extensions | ext)
+      action="extensions"
+      shift
+      postgres_manager_extensions_parse_requirements "$@"
+      shift $#
+      ;;
+
     setup)
       action="setup"
       shift
@@ -1875,13 +3003,6 @@ parse_requirements() {
       action="restore"
       shift
       postgres_manager_restore_parse_requirements "$@"
-      shift $#
-      ;;
-
-    extensions | ext)
-      action="extensions"
-      shift
-      postgres_manager_extensions_parse_requirements "$@"
       shift $#
       ;;
 
@@ -2019,6 +3140,999 @@ postgres_manager_status_parse_requirements() {
   done
 
   action="status"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        printf "invalid argument: %s\n" "$key" >&2
+        exit 1
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_db_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_db_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action=${1:-}
+
+  case $action in
+
+    menu)
+      action="menu"
+      shift
+      postgres_manager_db_menu_parse_requirements "$@"
+      shift $#
+      ;;
+
+    list | ls)
+      action="list"
+      shift
+      postgres_manager_db_list_parse_requirements "$@"
+      shift $#
+      ;;
+
+    create)
+      action="create"
+      shift
+      postgres_manager_db_create_parse_requirements "$@"
+      shift $#
+      ;;
+
+    drop)
+      action="drop"
+      shift
+      postgres_manager_db_drop_parse_requirements "$@"
+      shift $#
+      ;;
+
+    *)
+      action="menu"
+      postgres_manager_db_menu_parse_requirements "$@"
+      shift $#
+      ;;
+
+  esac
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        printf "invalid argument: %s\n" "$key" >&2
+        exit 1
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_db_menu_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_db_menu_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="db menu"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        printf "invalid argument: %s\n" "$key" >&2
+        exit 1
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_db_list_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_db_list_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="db list"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        printf "invalid argument: %s\n" "$key" >&2
+        exit 1
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_db_create_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_db_create_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="db create"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --owner)
+
+        if [[ -n ${2+x} ]]; then
+          args['--owner']="$2"
+          shift
+          shift
+        else
+          printf "%s\n" "--owner requires an argument: --owner USER" >&2
+          exit 1
+        fi
+        ;;
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          if [[ -z ${args['name']+x} ]]; then
+            args['name']=$1
+            shift
+          else
+            printf "invalid argument: %s\n" "$key" >&2
+            exit 1
+          fi
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        if [[ -z ${args['name']+x} ]]; then
+          args['name']=$1
+          shift
+        else
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+        fi
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_db_drop_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_db_drop_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="db drop"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --yes | -y)
+
+        args['--yes']=1
+        shift
+        ;;
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          if [[ -z ${args['name']+x} ]]; then
+            args['name']=$1
+            shift
+          else
+            printf "invalid argument: %s\n" "$key" >&2
+            exit 1
+          fi
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        if [[ -z ${args['name']+x} ]]; then
+          args['name']=$1
+          shift
+        else
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+        fi
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_user_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_user_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action=${1:-}
+
+  case $action in
+
+    menu)
+      action="menu"
+      shift
+      postgres_manager_user_menu_parse_requirements "$@"
+      shift $#
+      ;;
+
+    list | ls)
+      action="list"
+      shift
+      postgres_manager_user_list_parse_requirements "$@"
+      shift $#
+      ;;
+
+    create)
+      action="create"
+      shift
+      postgres_manager_user_create_parse_requirements "$@"
+      shift $#
+      ;;
+
+    password | passwd)
+      action="password"
+      shift
+      postgres_manager_user_password_parse_requirements "$@"
+      shift $#
+      ;;
+
+    grant)
+      action="grant"
+      shift
+      postgres_manager_user_grant_parse_requirements "$@"
+      shift $#
+      ;;
+
+    revoke)
+      action="revoke"
+      shift
+      postgres_manager_user_revoke_parse_requirements "$@"
+      shift $#
+      ;;
+
+    drop)
+      action="drop"
+      shift
+      postgres_manager_user_drop_parse_requirements "$@"
+      shift $#
+      ;;
+
+    *)
+      action="menu"
+      postgres_manager_user_menu_parse_requirements "$@"
+      shift $#
+      ;;
+
+  esac
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        printf "invalid argument: %s\n" "$key" >&2
+        exit 1
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_user_menu_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_user_menu_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="user menu"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        printf "invalid argument: %s\n" "$key" >&2
+        exit 1
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_user_list_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_user_list_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="user list"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        printf "invalid argument: %s\n" "$key" >&2
+        exit 1
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_user_create_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_user_create_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="user create"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --read-only)
+
+        if [[ -n ${2+x} ]]; then
+          args['--read-only']="$2"
+          shift
+          shift
+        else
+          printf "%s\n" "--read-only requires an argument: --read-only DATABASES" >&2
+          exit 1
+        fi
+        ;;
+
+      --password-stdin)
+
+        args['--password-stdin']=1
+        shift
+        ;;
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          if [[ -z ${args['name']+x} ]]; then
+            args['name']=$1
+            shift
+          else
+            printf "invalid argument: %s\n" "$key" >&2
+            exit 1
+          fi
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        if [[ -z ${args['name']+x} ]]; then
+          args['name']=$1
+          shift
+        else
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+        fi
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_user_password_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_user_password_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="user password"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --password-stdin)
+
+        args['--password-stdin']=1
+        shift
+        ;;
+
+      --yes | -y)
+
+        args['--yes']=1
+        shift
+        ;;
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          if [[ -z ${args['name']+x} ]]; then
+            args['name']=$1
+            shift
+          else
+            printf "invalid argument: %s\n" "$key" >&2
+            exit 1
+          fi
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        if [[ -z ${args['name']+x} ]]; then
+          args['name']=$1
+          shift
+        else
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+        fi
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_user_grant_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_user_grant_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="user grant"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          if [[ -z ${args['name']+x} ]]; then
+            args['name']=$1
+            shift
+
+          elif [[ -z ${args['databases']+x} ]]; then
+            args['databases']=$1
+            shift
+          else
+            printf "invalid argument: %s\n" "$key" >&2
+            exit 1
+          fi
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        if [[ -z ${args['name']+x} ]]; then
+          args['name']=$1
+          shift
+
+        elif [[ -z ${args['databases']+x} ]]; then
+          args['databases']=$1
+          shift
+        else
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+        fi
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_user_revoke_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_user_revoke_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="user revoke"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          if [[ -z ${args['name']+x} ]]; then
+            args['name']=$1
+            shift
+
+          elif [[ -z ${args['databases']+x} ]]; then
+            args['databases']=$1
+            shift
+          else
+            printf "invalid argument: %s\n" "$key" >&2
+            exit 1
+          fi
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        if [[ -z ${args['name']+x} ]]; then
+          args['name']=$1
+          shift
+
+        elif [[ -z ${args['databases']+x} ]]; then
+          args['databases']=$1
+          shift
+        else
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+        fi
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_user_drop_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_user_drop_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="user drop"
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+
+      --yes | -y)
+
+        args['--yes']=1
+        shift
+        ;;
+
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          key="$1"
+
+          if [[ -z ${args['name']+x} ]]; then
+            args['name']=$1
+            shift
+          else
+            printf "invalid argument: %s\n" "$key" >&2
+            exit 1
+          fi
+
+        done
+        break
+        ;;
+
+      -?*)
+        printf "invalid option: %s\n" "$key" >&2
+        exit 1
+        ;;
+
+      *)
+
+        if [[ -z ${args['name']+x} ]]; then
+          args['name']=$1
+          shift
+        else
+          printf "invalid argument: %s\n" "$key" >&2
+          exit 1
+        fi
+
+        ;;
+
+    esac
+  done
+
+}
+
+postgres_manager_extensions_parse_requirements() {
+  local key
+
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case "$key" in
+      --help | -h)
+        long_usage=yes
+        postgres_manager_extensions_usage
+        exit
+        ;;
+
+      *)
+        break
+        ;;
+
+    esac
+  done
+
+  action="extensions"
 
   while [[ $# -gt 0 ]]; do
     key="$1"
@@ -2591,60 +4705,6 @@ postgres_manager_restore_parse_requirements() {
 
 }
 
-postgres_manager_extensions_parse_requirements() {
-  local key
-
-  while [[ $# -gt 0 ]]; do
-    key="$1"
-    case "$key" in
-      --help | -h)
-        long_usage=yes
-        postgres_manager_extensions_usage
-        exit
-        ;;
-
-      *)
-        break
-        ;;
-
-    esac
-  done
-
-  action="extensions"
-
-  while [[ $# -gt 0 ]]; do
-    key="$1"
-    case "$key" in
-
-      --)
-        shift
-        while [[ $# -gt 0 ]]; do
-          key="$1"
-
-          printf "invalid argument: %s\n" "$key" >&2
-          exit 1
-
-        done
-        break
-        ;;
-
-      -?*)
-        printf "invalid option: %s\n" "$key" >&2
-        exit 1
-        ;;
-
-      *)
-
-        printf "invalid argument: %s\n" "$key" >&2
-        exit 1
-
-        ;;
-
-    esac
-  done
-
-}
-
 postgres_manager_self_update_parse_requirements() {
   local key
 
@@ -2803,7 +4863,7 @@ before_hook() {
 }
 
 initialize() {
-  declare -g version="0.2.0"
+  declare -g version="0.3.0"
   set -Eeuo pipefail
 
   declare -gr INSTALL_PATH="/usr/local/sbin/postgres-manager"
@@ -2860,6 +4920,20 @@ run() {
   case "$action" in
     "menu") postgres_manager_menu_command ;;
     "status") postgres_manager_status_command ;;
+    "db") postgres_manager_db_command ;;
+    "db menu") postgres_manager_db_menu_command ;;
+    "db list") postgres_manager_db_list_command ;;
+    "db create") postgres_manager_db_create_command ;;
+    "db drop") postgres_manager_db_drop_command ;;
+    "user") postgres_manager_user_command ;;
+    "user menu") postgres_manager_user_menu_command ;;
+    "user list") postgres_manager_user_list_command ;;
+    "user create") postgres_manager_user_create_command ;;
+    "user password") postgres_manager_user_password_command ;;
+    "user grant") postgres_manager_user_grant_command ;;
+    "user revoke") postgres_manager_user_revoke_command ;;
+    "user drop") postgres_manager_user_drop_command ;;
+    "extensions") postgres_manager_extensions_command ;;
     "setup") postgres_manager_setup_command ;;
     "edit") postgres_manager_edit_command ;;
     "list") postgres_manager_list_command ;;
@@ -2867,7 +4941,6 @@ run() {
     "check") postgres_manager_check_command ;;
     "verify") postgres_manager_verify_command ;;
     "restore") postgres_manager_restore_command ;;
-    "extensions") postgres_manager_extensions_command ;;
     "self-update") postgres_manager_self_update_command ;;
     "cron-backup") postgres_manager_cron_backup_command ;;
   esac

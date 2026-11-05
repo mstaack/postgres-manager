@@ -10,6 +10,7 @@ show_status() {
 
   if pg_ready; then
     status_postgres
+    status_users
     status_apps
     status_archiving
   else
@@ -122,4 +123,20 @@ status_backups() {
   row Backups "$(good ok) · $age_txt · $count sets · $(hb "$repo_total") in repo"
   row PITR "from $(fmt_ts "$oldest_stop") ($(ago "$oldest_stop")) until now · retention ${RETENTION_DAYS}d · $(repo_label)"
   row Schedule "$(schedule_line)"
+}
+
+status_users() {
+  local name flags out="" n=0 line rows=()
+  mapfile -t rows < <(roles_info)
+  for line in "${rows[@]}"; do
+    IFS=$'\t' read -r name flags _ <<<"$line"
+    [[ -n $name ]] || continue
+    n=$((n + 1))
+    if ((n > 8)); then continue; fi
+    flags=${flags//createdb/}
+    flags=$(sed -E 's/(, )+/, /g; s/^, |, $//g' <<<"${flags#-}")
+    out+="${out:+, }$name${flags:+ $(dim "($flags)")}"
+  done
+  if ((n > 8)); then out+=" … +$((n - 8))"; fi
+  row Users "$out"
 }

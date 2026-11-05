@@ -72,7 +72,7 @@ prompt_cipher() {
     [[ -n $CIPHER_PASS ]] || die "Passphrase is required"
     return 0
   fi
-  CIPHER_PASS=$(head -c 48 /dev/urandom | base64 | tr -d '\n/+=' | head -c 64)
+  CIPHER_PASS=$(random_secret 64)
   printf '\n  %s┌──────────────────────────────────────────────────────────────────────────┐%s\n' "$Y" "$N"
   printf '  %s│%s %-73s%s│%s\n' "$Y" "$N" "Encryption passphrase — store it in your password manager NOW." "$Y" "$N"
   printf '  %s│%s %-73s%s│%s\n' "$Y" "$N" "Without it the backups cannot be restored. It is also kept in" "$Y" "$N"

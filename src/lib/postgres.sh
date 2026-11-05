@@ -25,6 +25,10 @@ detect_cluster() {
   local rows=() labels=() r sel="" pick v c p s
   mapfile -t rows < <(pg_lsclusters -h 2>/dev/null | awk '{print $1" "$2" "$3" "$4" "$6}')
   ((${#rows[@]})) || die "No PostgreSQL cluster found (pg_lsclusters is empty)"
+  # Child processes of the menu inherit the cluster picked there
+  if [[ -z $PG_VERSION && ${PGM_CLUSTER-} == */* ]]; then
+    PG_VERSION=${PGM_CLUSTER%%/*} PG_CLUSTER=${PGM_CLUSTER#*/}
+  fi
   if [[ -n $PG_VERSION && -n $PG_CLUSTER ]]; then
     for r in "${rows[@]}"; do
       if [[ $r == "$PG_VERSION $PG_CLUSTER "* ]]; then sel=$r; fi
@@ -79,7 +83,7 @@ list_databases() {
 }
 
 database_exists() {
-  list_databases | grep -x "$1" >/dev/null
+  list_databases | grep -Fx -- "$1" >/dev/null
 }
 
 ensure_conf_d() {
@@ -119,4 +123,34 @@ check_overrides() {
       warn "$name in $snippet is overridden by $src — remove it there"
     fi
   done
+}
+
+require_pg() {
+  pg_ready || die "PostgreSQL $PG_VERSION/$PG_CLUSTER is not running"
+}
+
+## SQL quoting: sql_ident NAME → "name", sql_lit TEXT → 'text' (standard_conforming_strings)
+sql_ident() { printf '"%s"' "${1//\"/\"\"}"; }
+sql_lit() { printf "'%s'" "${1//\'/\'\'}"; }
+
+## psql_script [DB] — runs SQL from stdin (supports \gexec; nothing shows up in the process list)
+psql_script() {
+  as_postgres psql -XAtq -v ON_ERROR_STOP=1 -p "$PG_PORT" -d "${1:-postgres}" -F $'\t'
+}
+
+## psql_secret SQL — runs a statement that contains a secret: via stdin, with statement logging and
+## pg_stat_statements utility tracking switched off for this session, so it lands in no log or view.
+psql_secret() {
+  printf '%s\n' "set log_statement = 'none';" "set log_min_duration_statement = -1;" \
+    "set log_min_error_statement = 'panic';" "set pg_stat_statements.track_utility = off;" "$1;" |
+    psql_script >/dev/null
+}
+
+role_exists() {
+  [[ -n $(psql_q "select 1 from pg_roles where rolname = $(sql_lit "$1")") ]]
+}
+
+## valid_name NAME — lowercase identifier that never needs quoting
+valid_name() {
+  [[ $1 =~ ^[a-z_][a-z0-9_]{0,62}$ ]]
 }
