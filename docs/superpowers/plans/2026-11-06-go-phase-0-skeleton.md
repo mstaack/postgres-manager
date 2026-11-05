@@ -6,7 +6,7 @@
 
 **Architecture:** `cmd/pgm` → `internal/cli` (cobra) → domain packages. The only process execution happens in `internal/sys` behind a `Runner` interface, so pure logic is unit-tested with `sys.FakeRunner`. The bash tool stays the default until Phase 6; e2e tests choose the implementation with `PGM_IMPL=bash|go`.
 
-**Tech Stack:** Go 1.25 (`go.mod`: `go 1.25`), `github.com/spf13/cobra`, `github.com/charmbracelet/huh` (TTY prompts only), `golang.org/x/term`, golangci-lint v2 (Docker image `golangci/golangci-lint:v2.1.6`), the existing Docker e2e harness.
+**Tech Stack:** Go 1.25 (`go.mod`: `go 1.25`), `github.com/spf13/cobra`, `github.com/charmbracelet/huh` (TTY prompts only), `golang.org/x/term`, golangci-lint v2 (Docker image `golangci/golangci-lint:v2.4.0`), the existing Docker e2e harness.
 
 **Spec:** `docs/superpowers/plans/2026-11-06-go-migration.md` (master plan: Global Constraints, Phase 0, Decisions) + `AGENTS.md` + the bash reference implementation in `src/`.
 
@@ -107,7 +107,7 @@ func main() {
 ```make
 GO_ARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 GO_LDFLAGS := -s -w -X main.version=$(shell cat VERSION)
-GOLANGCI := docker run --rm -v "$(CURDIR):/app" -w /app golangci/golangci-lint:v2.1.6
+GOLANGCI := docker run --rm -v "$(CURDIR):/app" -w /app golangci/golangci-lint:v2.4.0
 
 go-build: ## Build dist/pgm-linux-$(GO_ARCH) (GO_ARCH=amd64|arm64)
 	@CGO_ENABLED=0 GOOS=linux GOARCH=$(GO_ARCH) go build -trimpath -ldflags "$(GO_LDFLAGS)" -o dist/pgm-linux-$(GO_ARCH) ./cmd/pgm
@@ -345,7 +345,7 @@ func DetectR2Account(files []string) string // first match of [0-9a-f]{32}\.((eu
 
 **Files:**
 - Create: `internal/cli/commands.go`, `internal/cli/status.go`, `internal/cli/commands_test.go`, `internal/status/status.go`, `internal/status/status_test.go`, `internal/config/exists.go`, `test/go-suites`
-- Modify: `internal/cli/root.go`, `test/run.sh`, `test/container.sh`, `test/lib.sh`, `test/suites/10-cli.sh`, `.github/workflows/ci.yml`
+- Modify: `internal/cli/root.go`, `Makefile`, `test/run.sh`, `test/container.sh`, `test/lib.sh`, `test/suites/10-cli.sh`, `.github/workflows/ci.yml`
 
 **Interfaces:**
 - Consumes: everything from Tasks 2–5.
@@ -374,14 +374,15 @@ func Render(u *ui.UI, f Facts)
 
 **Status** ports `src/lib/status.sh` row for row, with the same labels and texts: header `pgm <version> · <hostname> · <OS.Pretty> (<uname -m equivalent: runtime.GOARCH mapped amd64→x86_64, arm64→aarch64>)`; rows `System` (load from `/proc/loadavg` first 3 fields joined with `/`, `runtime.NumCPU()` cpu, mem used/total from `/proc/meminfo` MemTotal−MemAvailable, uptime from `/proc/uptime` through `Ago`), `Disk` (statfs of DataDir: `used/total used (pct%), free free on <mount>` — get the mount from the longest `/proc/self/mounts` prefix match; sizes via `HumanBytes`), then, if `PG.Ready`: `Postgres` (3 rows: the same SQL as `status_postgres`), `Databases`, `Extensions`, `Users` (the `roles_info` SQL from `src/lib/access.sh:250-266`, first 8 + `… +N`, `createdb` stripped as in bash), `Apps` (`<basename site> → <db> (user <user> @ <host>:<port>, <env>)`), `Archiving` (`status_archiving`, `.ready` count from `<DataDir>/pg_wal/archive_status`); else `Postgres` = `<id> port <port> · not accepting connections (<status>)`. `Backups`: if `!Configured` → `not configured · run: pgm setup`; if configured → `configured · details in the next release`. Every query that fails renders its row value as `?` (Meh) instead of failing the dashboard. Thresholds as in bash: connections ≥80% bad, longest txn >300s meh.
 
-**e2e wiring:**
-- `test/run.sh`: pass `-e PGM_IMPL="${PGM_IMPL:-bash}"` to `docker run`; when `PGM_IMPL=go`, require `dist/pgm-linux-<arch of the image>`: the image runs with the host's Docker arch, so check `dist/pgm-linux-$(docker info --format '{{.Architecture}}' | sed 's/x86_64/amd64/;s/aarch64/arm64/')` and print `run: make go-build` if missing.
-- `test/container.sh`: if `PGM_IMPL=go`: `install -m 0755 /src/dist/pgm-linux-$(dpkg --print-architecture) /usr/local/sbin/pgm && ln -sf pgm /usr/local/sbin/postgres-manager`; else install the bash script as today. Print the implementation in the `===` banner line.
-- `test/lib.sh`: unchanged `pm()` (it calls `/usr/local/sbin/postgres-manager`, which is the symlink in Go mode, so the symlink is covered).
-- `test/suites/10-cli.sh`: the version assertion compares against `$(cat /src/VERSION)` when `PGM_IMPL=go`, else bashly.yml; the backup assertion expects `setup' first` (matches both implementations); the root check expects `Run as root` (both). No other changes.
-- `test/go-suites`: one line `cli`.
+**e2e wiring (Go only — the bash tool is dropped, Ruling 3):**
+- `Makefile`: replace the bash targets. `build` = the old `go-build` (keep `go-build` as an alias), `unit` = `go test ./...`, `lint` = `go vet` + golangci-lint, `test` = build + `bash test/run.sh <distro> <suites>` for every distro in `DISTROS`, with `SUITES` defaulting to `$(cat test/go-suites)`. Remove the bashly/shellcheck variables and the `dev` target. Keep `help` working for hyphenated names (`^[a-z-]+:`).
+- `test/run.sh`: require `dist/pgm-linux-<arch>` where the arch is `docker info --format '{{.Architecture}}'` mapped `x86_64→amd64`, `aarch64→arm64`; if missing print `dist/pgm-linux-<arch> missing — run: make build` and exit 1. Keep the container label.
+- `test/container.sh`: `install -m 0755 /src/dist/pgm-linux-$(dpkg --print-architecture) /usr/local/sbin/pgm && ln -sf pgm /usr/local/sbin/postgres-manager`.
+- `test/lib.sh`: `pm()` calls `/usr/local/sbin/pgm`. Add `pm_legacy()` calling `/usr/local/sbin/postgres-manager` (the symlink), used once in 10-cli.
+- `test/suites/10-cli.sh`: version compared against `$(cat /src/VERSION)`; the backup assertion expects `run 'pgm setup' first`; the root check uses `/usr/local/sbin/pgm`; add `run pm_legacy --version` → assert ok (the symlink works). Help assertions stay.
+- `test/go-suites`: one line `cli`. Suites for unported features stay in `test/suites/` untouched until their phase ports them.
 
-**CI** (`.github/workflows/ci.yml`): add a job `go` (name `Go: vet, lint, unit`) with `actions/setup-go@v5` (`go-version-file: go.mod`), `go vet ./...`, `golangci/golangci-lint-action@v8` (`version: v2.1.6`), `go test ./...`; and a job `go-e2e` (needs `go`; matrix the same 4 images) running `make go-build GO_ARCH=amd64` then `PGM_IMPL=go bash test/run.sh '<image>' $(cat test/go-suites)`. The existing bash jobs stay unchanged.
+**CI** (`.github/workflows/ci.yml`): replace both bash jobs. Job `lint` (name `Go: vet, lint, unit`): `actions/setup-go@v5` (`go-version-file: go.mod`), `go vet ./...`, `golangci/golangci-lint-action@v8` (`version: v2.4.0`), `go test ./...`. Job `test` (needs lint; matrix the same 4 images): setup-go, `make build GO_ARCH=amd64`, `bash test/run.sh '<image>' $(cat test/go-suites)`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `TestCommandTree` (`commands_test.go`): `newRoot("x")` has commands `menu status db user extensions setup edit list backup check verify restore self-update cron-backup`; aliases `db→databases`, `user→users`, `extensions→ext`, `list→ls`, `db list→ls`, `user list→ls`, `user password→passwd`; `cron-backup`, `db menu`, `user menu` hidden; `restore --time x --set y` → error; `backup bogus` → error mentioning `full, diff, incr`; `user create x --read-only` (no value) → error; `--help` output contains `  status` and `  restore`.
@@ -391,7 +392,7 @@ func Render(u *ui.UI, f Facts)
 - [ ] **Step 2:** `go test ./internal/...` → FAIL.
 - [ ] **Step 3: Implement** commands, status, config.Configured, the e2e changes and CI.
 - [ ] **Step 4:** `go test ./...` → PASS; `make go-lint` → clean.
-- [ ] **Step 5: e2e:** `make go-test DISTROS=debian:12 SUITES=cli` → all `10-cli` assertions pass. Then the bash regression check: `bash test/run.sh debian:12 cli` (the bash script, `PGM_IMPL` unset) → passes. Run the remaining distros: `make go-test` (all 4) → passes.
+- [ ] **Step 5: e2e:** `make test DISTROS=debian:12` → all `10-cli` assertions pass. Then all 4 distros: `make test` → passes.
 - [ ] **Step 6: Commit** `git commit -m "pgm: full command tree, status dashboard, Go e2e and CI"`.
 
 ---
