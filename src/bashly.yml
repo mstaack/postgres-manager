@@ -1,0 +1,92 @@
+name: postgres-manager
+help: |-
+  PostgreSQL status, pgBackRest point-in-time recovery and extensions for Debian/Ubuntu servers.
+  Works nicely with Laravel Forge (discovers apps from /home/*/*/.env). Run as root.
+version: 0.2.0
+
+examples:
+- sudo postgres-manager
+- sudo postgres-manager setup
+- sudo postgres-manager restore --time "2026-11-05 10:42"
+
+commands:
+- name: menu
+  default: true
+  help: Status dashboard and interactive menu
+
+- name: status
+  help: Show system, PostgreSQL, WAL archiving and backup status
+
+- name: setup
+  help: Configure pgBackRest backups and WAL archiving (Cloudflare R2, S3 or a local directory)
+
+- name: edit
+  help: Change schedule, retention, RPO, performance, repository or heartbeat
+
+- name: list
+  alias: ls
+  help: List backups and the point-in-time recovery window
+  dependencies: &backup_deps
+    pgbackrest: run 'postgres-manager setup' first
+    jq: run 'postgres-manager setup' first
+
+- name: backup
+  help: Run a backup now
+  dependencies: *backup_deps
+  args:
+  - name: type
+    help: Backup type
+    default: diff
+    allowed: [full, diff, incr]
+  examples:
+  - postgres-manager backup
+  - postgres-manager backup full
+
+- name: check
+  help: Verify WAL archiving and repository access
+  dependencies: *backup_deps
+
+- name: verify
+  help: Restore drill - restore the latest backup into a temporary directory, start it, compare it with the live cluster, remove it
+  dependencies: *backup_deps
+  flags:
+  - long: --keep
+    help: Keep the restored copy running for inspection
+
+- name: restore
+  help: Restore or point-in-time recovery (interactive without flags)
+  dependencies: *backup_deps
+  flags:
+  - long: --time
+    arg: timestamp
+    help: Recover to this point in time (server timezone unless given)
+    conflicts: [--set]
+  - long: --set
+    arg: label
+    help: Recover to the end of this backup set (see 'list')
+  - long: --target-dir
+    arg: dir
+    help: Restore into this directory as a standalone copy instead of replacing the live cluster
+  - long: --yes
+    short: -y
+    help: Skip confirmations
+  examples:
+  - postgres-manager restore
+  - postgres-manager restore --time "2026-11-05 10:42" --target-dir /var/lib/postgresql/pitr
+  - postgres-manager restore --set 20261105-013001F --yes
+
+- name: extensions
+  alias: ext
+  help: Install and enable PostGIS, pgvector, TimescaleDB, pg_cron and pg_stat_statements
+
+- name: self-update
+  help: Update postgres-manager from GitHub
+
+- name: cron-backup
+  private: true
+  help: Scheduled backup with heartbeat ping (called from cron)
+  dependencies: *backup_deps
+  args:
+  - name: type
+    required: true
+    allowed: [full, diff, incr]
