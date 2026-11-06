@@ -15,7 +15,12 @@ Status as of 2026-11-06. Branch `go-migration`.
 - e2e (`test/suites`, Docker): cli, extensions, databases, users, menu (incl. pty ESC/secret tests), backups (setup with a local repo, backups, drill, PITR copy, edit, second repository, single-database restore incl. `--replace`, live restore) and upgrade (`95-upgrade`: PG N → N+1 with backups configured, `check` after stanza-upgrade, `--drop-old`).
 - Release plumbing: `.goreleaser.yaml` (binaries `pgm-linux-{amd64,arm64}` + `checksums.txt`), `.github/workflows/release.yml` on `v*` tags, `install.sh`, `self-update` against the GitHub releases API. No release has been published yet.
 
+## Added after 0.0.1
+- macOS builds (`pgm-darwin-{arm64,amd64}`): `pgm receive HOST DB` / `pgm send FILE HOST` stream pg_dump archives over ssh into/out of `pgm db dump/load` on the server (e2e `60-transfer` via sshd in the container). Server commands refuse to run on macOS.
+- `pgm tune`: pgtune-style settings in `conf.d/92-postgres-manager-tuning.conf` (e2e `65-tune`).
+
 ## Not verified yet
+- The macOS binaries on a real Mac (cross-compiled; Go ad-hoc signs darwin/arm64).
 - Cloudflare R2 / S3 repositories against a real bucket (only the rendered config is unit-tested).
 - systemd timers on a real systemd host (unit files pass `systemd-analyze verify`; the e2e containers use the cron fallback).
 - `pgm install` on a server without PostgreSQL (no e2e suite yet), TimescaleDB/PostGIS/pg_cron package installs, arm64.

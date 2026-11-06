@@ -15,6 +15,7 @@ Go CLI (`pgm`) that manages PostgreSQL on Debian/Ubuntu servers: a status dashbo
 - `internal/pg`: cluster detection, psql wrapper, quoting, conf.d snippets.
 - `internal/access`: databases, roles, read-only grants. `internal/apps`: Forge `.env` discovery.
 - `internal/config`: `/etc/postgres-manager/config.toml`. `internal/backup`: pgbackrest.conf/snippet/schedule/standalone renderers, pgBackRest runs, restores.
+- `internal/tune`: pgtune-style recommendations (pure). `internal/cli/transfer.go`: `db dump/load` and the ssh client commands `receive`/`send` (annotated `pgm/local`: no root, no PostgreSQL; the only commands besides `self-update` that run on macOS).
 - `internal/ext`: extension catalog (data). `internal/apt`: packages and repositories. `internal/format`: value formatting.
 - `test/run.sh`: end-to-end test in a throwaway container. `docs/superpowers/`: migration plans and handoff notes.
 

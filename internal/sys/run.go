@@ -17,8 +17,9 @@ type Cmd struct {
 	Name       string
 	Args       []string
 	Stdin      io.Reader
-	AsPostgres bool     // run as: runuser -u postgres -- Name Args...
-	Env        []string // appended to the base environment
+	AsPostgres bool      // run as: runuser -u postgres -- Name Args...
+	Env        []string  // appended to the base environment
+	Stdout     io.Writer // Stream only: where stdout goes (default the terminal)
 }
 
 // Runner starts processes. Tests use FakeRunner.
@@ -95,6 +96,9 @@ func (ExecRunner) Run(ctx context.Context, c Cmd) (string, error) {
 func (ExecRunner) Stream(ctx context.Context, c Cmd) error {
 	cmd := command(ctx, c)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if c.Stdout != nil {
+		cmd.Stdout = c.Stdout
+	}
 	return wrap(c, cmd.Run(), "")
 }
 

@@ -61,6 +61,7 @@ func (a *App) mainMenu(ctx context.Context) error {
 		{Key: "3", Label: "Extensions", Desc: "PostGIS, pgvector, TimescaleDB, pg_cron, pg_stat_statements"},
 		{Key: "4", Label: "Backups & restore", Desc: "pgBackRest backups, point-in-time restore, restore drill"},
 		{Key: "5", Label: "PostgreSQL versions", Desc: "install another major version, upgrade this cluster"},
+		{Key: "6", Label: "Tuning", Desc: "memory, WAL, planner and parallelism settings for this machine"},
 		{Key: "s", Label: "Status", Desc: "refresh the dashboard"},
 		{Key: "q", Label: "Quit"},
 	}, map[string]func() error{
@@ -69,6 +70,7 @@ func (a *App) mainMenu(ctx context.Context) error {
 		"3": func() error { return a.extensions(ctx) },
 		"4": func() error { return a.backupsMenu(ctx) },
 		"5": func() error { return a.versionsMenu(ctx) },
+		"6": func() error { return a.tune(ctx, tuneOpts{}) },
 		"s": func() error { a.showStatus(ctx); return nil },
 		"S": func() error { a.showStatus(ctx); return nil },
 	})

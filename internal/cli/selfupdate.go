@@ -17,7 +17,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mstaack/postgres-manager/internal/backup"
 	"github.com/mstaack/postgres-manager/internal/sys"
 )
 
@@ -28,7 +27,7 @@ func (a *App) selfUpdateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use: "self-update", Args: cobra.NoArgs,
 		Short:       "Update pgm to the latest GitHub release (sha256-verified)",
-		Annotations: map[string]string{annNoCluster: "1"},
+		Annotations: map[string]string{annLocal: "1"},
 		RunE:        func(cmd *cobra.Command, _ []string) error { return a.selfUpdate(cmd.Context()) },
 	}
 }
@@ -69,7 +68,7 @@ func (a *App) selfUpdate(ctx context.Context) error {
 		u.OK("pgm %s is the latest release", a.Version)
 		return nil
 	}
-	name := "pgm-linux-" + runtime.GOARCH
+	name := "pgm-" + runtime.GOOS + "-" + runtime.GOARCH
 	var binURL, sumURL string
 	for _, as := range rel.Assets {
 		switch as.Name {
@@ -102,7 +101,14 @@ func (a *App) selfUpdate(ctx context.Context) error {
 	if want == "" || hex.EncodeToString(got[:]) != want {
 		return fmt.Errorf("checksum mismatch for %s — not installed", name)
 	}
-	dir := filepath.Dir(backup.BinPath)
+	dest, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if dest, err = filepath.EvalSymlinks(dest); err != nil {
+		return err
+	}
+	dir := filepath.Dir(dest)
 	tmp, err := os.CreateTemp(dir, ".pgm-new-*")
 	if err != nil {
 		return err
@@ -121,9 +127,9 @@ func (a *App) selfUpdate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("the new binary does not run — not installed: %w", err)
 	}
-	if err := os.Rename(tmp.Name(), backup.BinPath); err != nil {
+	if err := os.Rename(tmp.Name(), dest); err != nil {
 		return err
 	}
-	u.OK("Installed pgm %s to %s (was %s)", strings.TrimSpace(out), backup.BinPath, a.Version)
+	u.OK("Installed pgm %s to %s (was %s)", strings.TrimSpace(out), dest, a.Version)
 	return nil
 }

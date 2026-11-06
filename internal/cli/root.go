@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -49,6 +50,7 @@ func (a *App) Apps() []apps.App { return apps.Scan(apps.EnvFiles()) }
 // Annotations on commands.
 const (
 	annNoCluster = "pgm/no-cluster" // runs without a cluster
+	annLocal     = "pgm/local"      // client command: no root, no PostgreSQL (also on macOS)
 )
 
 func newRoot(version string) *cobra.Command {
@@ -80,10 +82,15 @@ func newRoot(version string) *cobra.Command {
 			RunE:        func(cmd *cobra.Command, _ []string) error { return a.mainMenu(cmd.Context()) }},
 		&cobra.Command{Use: "status", Short: "Show system, PostgreSQL, WAL archiving and backup status", Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error { a.showStatus(cmd.Context()); return nil }},
-		a.dbCmd(), a.userCmd(), a.extCmd(),
+		a.dbCmd(), a.userCmd(), a.extCmd(), a.tuneCmd(), a.receiveCmd(), a.sendCmd(),
 	)
 	root.AddCommand(a.backupCmds()...)
 	root.AddCommand(a.restoreCmd(), a.verifyCmd(), a.installCmd(), a.upgradeCmd(), a.selfUpdateCmd())
+	if runtime.GOOS != "linux" {
+		// macOS: only the client commands (receive, send, self-update); bare pgm shows help
+		root.Annotations[annLocal] = "1"
+		root.RunE = func(cmd *cobra.Command, _ []string) error { return cmd.Help() }
+	}
 	return root
 }
 
@@ -91,6 +98,12 @@ func newRoot(version string) *cobra.Command {
 func (a *App) prepare(cmd *cobra.Command) error {
 	if err := cmd.ValidateFlagGroups(); err != nil { // cobra checks these only after the pre-run hooks
 		return err
+	}
+	if cmd.Annotations[annLocal] != "" {
+		return nil
+	}
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("%s runs on the Debian/Ubuntu server; on %s pgm only sends and receives dumps (pgm receive, pgm send)", cmd.CommandPath(), runtime.GOOS)
 	}
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("Run as root: sudo %s", cmd.CommandPath()) //nolint:staticcheck // user-facing

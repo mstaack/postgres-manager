@@ -6,13 +6,13 @@ A PostgreSQL manager for a single Debian/Ubuntu server: install PostgreSQL, data
 
 ## Install
 
-One line (amd64 or arm64, downloads the latest release and checks its sha256):
+One line on the server — or on your Mac to send and receive dumps (Linux amd64/arm64, macOS Apple Silicon/Intel; downloads the latest release and checks its sha256):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mstaack/postgres-manager/main/install.sh | sudo bash
 ```
 
-Then run `sudo pgm`. This installs `/usr/local/sbin/pgm` and a `postgres-manager` symlink. Update later with `sudo pgm self-update`. No PostgreSQL yet? `sudo pgm install` installs a major version and creates a running cluster.
+Then run `sudo pgm`. On Linux this installs `/usr/local/sbin/pgm` and a `postgres-manager` symlink, on macOS `/usr/local/bin/pgm`. Update later with `sudo pgm self-update`. No PostgreSQL yet? `sudo pgm install` installs a major version and creates a running cluster.
 
 Without the script (pick `amd64` or `arm64`):
 
@@ -31,7 +31,7 @@ The menu has sections for **Databases**, **Users & access**, **Extensions**, **B
 
 | Command | What it does |
 |---|---|
-| `db [list\|create\|drop]` | Databases with size, owner, sessions, read-only users and the apps that use them. `create NAME [--owner USER]` creates a UTF8 database and, if needed, its owner with a generated password. `drop NAME` terminates its sessions and asks you to type the name (`--yes` skips this) |
+| `db [list\|create\|drop\|dump\|load]` | Databases with size, owner, sessions, read-only users and the apps that use them. `create NAME [--owner USER]` creates a UTF8 database and, if needed, its owner with a generated password. `drop NAME` terminates its sessions and asks you to type the name (`--yes` skips this). `dump NAME > file` / `load NAME < file` write and read a pg_dump archive |
 | `user [list\|create\|password\|grant\|revoke\|drop]` | Users with their flags, databases, read access and apps. `create NAME --read-only app,crm` (or `all`) creates a read-only user. Passwords are generated and shown once, or read with `--password-stdin` |
 | `extensions` | Install and enable PostGIS, pgvector, TimescaleDB, pg_cron and pg_stat_statements, including `shared_preload_libraries` and `CREATE EXTENSION`. `extensions enable pgvector --db shop --yes` does it non-interactively |
 | `status` | System load, memory and disk. PostgreSQL connections, cache hit rate, longest transaction, WAL size, databases and extensions. Forge apps, WAL archiving health, backup age and the next scheduled backups |
@@ -44,6 +44,8 @@ The menu has sections for **Databases**, **Users & access**, **Extensions**, **B
 | `restore` | Whole cluster or one database; latest, a point in time or a backup picked from the list; into a separate directory, over the live cluster, or (one database) next to or instead of the live one. Interactive without flags |
 | `install [VERSION]` | Install a PostgreSQL major version (from apt.postgresql.org) and create a running cluster |
 | `upgrade [VERSION]` | Major upgrade with `pg_upgradecluster --link`: full backup first, extension packages for the new version, `stanza-upgrade`, a new full backup, `vacuumdb --analyze-in-stages`. `upgrade --drop-old` removes the old cluster afterwards |
+| `tune` | pgtune-style tuning from RAM, CPUs, SSD/HDD and the workload (web, OLTP, analytics, mixed): memory, WAL, planner and parallelism settings, shown as current vs recommended and written to `conf.d`. Gives PostgreSQL half the RAM when apps run on the same server. `--dry-run`, `--memory 8GB`, `--remove` |
+| `receive HOST DB` / `send FILE HOST` | Copy a database over ssh — from any machine with ssh, including macOS: download a dump of a server database, or load a dump into a server (`--as NAME`, `--replace`) |
 | `self-update` | Install the latest release from GitHub |
 
 ### Restore examples
@@ -62,6 +64,26 @@ sudo pgm restore --db shop --set 20261105-013001F --replace
 # Replace the whole live cluster with the end of a backup set (stops PostgreSQL!)
 sudo pgm restore --set 20261105-013001F
 ```
+
+### Send and receive databases over ssh (macOS or Linux)
+
+```bash
+pgm receive forge@db1.example.com shop                  # → shop-db1-<timestamp>.dump on your Mac
+pgm send shop-db1-20261106-1004.dump forge@db2.example.com --as shop_staging
+pgm send shop.dump root@db2 --replace                   # the current shop is kept as shop_old_<timestamp>
+```
+
+`receive` runs `pgm db dump` on the server and streams the archive over ssh; `send` streams it into `pgm db load`, which creates the database (owner = database name unless `--owner`, created with a generated password if missing), creates the extensions as postgres and restores everything else as the owner. Grants are not copied. The server needs pgm, and the ssh user must be root or allowed to run `sudo -n pgm` (`--no-sudo` for neither). Your Mac needs no PostgreSQL. The target server's PostgreSQL must be the same or a newer major version.
+
+### Tuning
+
+```bash
+sudo pgm tune              # asks for the workload and the RAM PostgreSQL may use, shows current vs recommended
+sudo pgm tune --dry-run    # only show
+sudo pgm tune --workload web --memory 8GB --yes
+```
+
+The values go to `conf.d/92-postgres-manager-tuning.conf`; `shared_buffers`, `max_connections` and the worker settings need a restart, which `tune` offers.
 
 ### Read-only users
 

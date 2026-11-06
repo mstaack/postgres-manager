@@ -6,14 +6,14 @@ builds:
     main: ./cmd/pgm
     binary: pgm
     env: [CGO_ENABLED=0]
-    goos: [linux]
+    goos: [linux, darwin]
     goarch: [amd64, arm64]
     flags: [-trimpath]
     ldflags: ["-s -w -X main.version={{ .Version }}"]
 
 archives:
   - formats: [binary]
-    name_template: "pgm-linux-{{ .Arch }}"
+    name_template: "pgm-{{ .Os }}-{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt

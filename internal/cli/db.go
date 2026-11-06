@@ -50,7 +50,7 @@ func (a *App) dbCmd() *cobra.Command {
 				}
 				return a.dbList(cmd.Context())
 			}},
-		create, drop,
+		create, drop, a.dumpCmd(), a.loadCmd(),
 	)
 	return db
 }
