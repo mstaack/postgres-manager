@@ -28,8 +28,8 @@ run() {
   RC=$?
 }
 
-## pm ARGS… — the script under test
-pm() { /usr/local/sbin/postgres-manager "$@"; }
+## pm ARGS… — the binary under test
+pm() { /usr/local/sbin/pgm "$@"; }
 
 ## sql DB QUERY — as the postgres superuser
 sql() { runuser -u postgres -- psql -XAtq -v ON_ERROR_STOP=1 -d "$1" -c "$2" 2>&1; }

@@ -20,7 +20,7 @@ run $'3\n\nq\n' -- pm
 assert_out "Extensions · PostgreSQL" "3 opens extensions"
 run $'1\n3\nb\nb\nq\n' -- pm
 assert_out "Users · PostgreSQL" "databases → users"
-if [[ ! -f /etc/postgres-manager/backup.conf ]]; then
+if [[ ! -f /etc/postgres-manager/config.toml ]]; then
   run $'4\nb\nq\n' -- pm
   assert_out "Set up backups" "backups menu offers setup when not configured"
 fi
@@ -66,12 +66,12 @@ if command -v script >/dev/null; then
   }
   ## pty CMD — runs CMD on a pseudo-terminal; a hang fails instead of blocking the suite
   pty() { timeout 60 script -qec "$1" /dev/null 2>&1; }
-  OUT=$(tty_keys '2\r' '1\r' '\e' 'b\r' 'q\r' | pty /usr/local/sbin/postgres-manager)
+  OUT=$(tty_keys '2\r' '1\r' '\e' 'b\r' 'q\r' | pty /usr/local/sbin/pgm)
   assert_out "Cancelled — back to the menu" "ESC key cancels user create"
-  OUT=$(tty_keys '1\r' '\e[A' '\e[B' 'b\r' 'q\r' | pty /usr/local/sbin/postgres-manager)
+  OUT=$(tty_keys '1\r' '\e[A' '\e[B' 'b\r' 'q\r' | pty /usr/local/sbin/pgm)
   assert_no_out "Unknown choice" "arrow keys are ignored, not taken as ESC"
   OUT=$(tty_keys 'ttyuser\r' '3\r' '2\r' 'Typed-Secret-123\r' 'Typed-Secret-123\r' |
-    pty "/usr/local/sbin/postgres-manager user create")
+    pty "/usr/local/sbin/pgm user create")
   assert_out "Created user ttyuser" "typed password accepted on a terminal"
   assert_no_out "Typed-Secret-123" "typed password is never echoed"
   assert_eq "1" "$(sql_as ttyuser Typed-Secret-123 postgres 'select 1')" "typed password works"

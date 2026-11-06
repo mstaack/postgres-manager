@@ -10,7 +10,8 @@ fi
 PGV=$(ls /etc/postgresql)
 export PGLOG=/var/log/postgresql/postgresql-$PGV-main.log
 pg_ctlcluster "$PGV" main start
-install -m 0755 /src/postgres-manager /usr/local/sbin/postgres-manager
+install -m 0755 "/src/dist/pgm-linux-$(dpkg --print-architecture)" /usr/local/sbin/pgm
+ln -sf pgm /usr/local/sbin/postgres-manager
 # shellcheck source=test/lib.sh
 . /src/test/lib.sh
 printf '%s=== %s · PostgreSQL %s%s\n' "$BOLD" "$PRETTY_NAME" "$PGV" "$RESET"

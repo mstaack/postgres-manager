@@ -12,19 +12,18 @@ concurrency:
 
 jobs:
   lint:
-    name: Build & lint
+    name: "Go: vet, lint, unit"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Generated script is up to date with src/
-        run: |
-          make build
-          git diff --exit-code -- postgres-manager || {
-            echo "::error file=postgres-manager::postgres-manager is out of date - run 'make build' and commit it"
-            exit 1
-          }
-      - name: shellcheck
-        run: make lint
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.4.0
+      - run: go test ./...
 
   test:
     name: E2E ${{ matrix.image }}
@@ -37,5 +36,9 @@ jobs:
         image: ['debian:12', 'debian:13', 'ubuntu:22.04', 'ubuntu:24.04']
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make build ARCH=amd64
       - name: Test suites in ${{ matrix.image }}
         run: bash test/run.sh '${{ matrix.image }}'

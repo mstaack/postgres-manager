@@ -2,7 +2,12 @@ module github.com/mstaack/postgres-manager
 
 go 1.25
 
-require github.com/spf13/cobra v1.10.2
+require (
+	github.com/BurntSushi/toml v1.5.0
+	github.com/spf13/cobra v1.10.2
+	golang.org/x/sys v0.37.0
+	golang.org/x/term v0.36.0
+)
 
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

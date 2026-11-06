@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 section "help, version, validation"
 run pm --version
-assert_eq "$(sed -n 's/^version: //p' /src/src/bashly.yml)" "$OUT" "--version matches bashly.yml"
+assert_eq "$(cat /src/VERSION)" "$OUT" "--version matches VERSION"
+run /usr/local/sbin/postgres-manager --version
+assert_eq "$(cat /src/VERSION)" "$OUT" "the postgres-manager symlink works"
 run pm --help
 assert_ok "--help"
 for c in status setup db user extensions restore; do assert_out "  $c" "--help lists $c"; done
@@ -10,12 +12,12 @@ assert_out "create" "db --help lists create"
 run pm user create --help
 assert_out "--read-only" "user create --help shows --read-only"
 run pm backup diff
-assert_failed "backup without pgBackRest points to setup" "run 'postgres-manager setup' first"
+assert_failed "backup without pgBackRest points to setup" "run 'pgm setup' first"
 run pm user create someone --read-only
 assert_failed "--read-only needs an argument"
 run pm nosuchcommand
 assert_failed "unknown command fails"
-run runuser -u nobody -- /usr/local/sbin/postgres-manager status
+run runuser -u nobody -- /usr/local/sbin/pgm status
 assert_failed "refuses to run without root" "Run as root"
 
 section "status without backups"

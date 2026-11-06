@@ -1,2 +1,0 @@
-require_pg
-db_list
