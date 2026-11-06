@@ -53,8 +53,12 @@ func DetectOS() (OS, error) {
 	return ParseOSRelease(string(b))
 }
 
-// PostgresIDs returns the uid/gid of the postgres user, or -1, -1.
+// PostgresIDs returns the uid/gid of the postgres user, or -1, -1 (also when not
+// running as root, where chown is not possible anyway).
 func PostgresIDs() (int, int) {
+	if os.Geteuid() != 0 {
+		return -1, -1
+	}
 	u, err := user.Lookup("postgres")
 	if err != nil {
 		return -1, -1
