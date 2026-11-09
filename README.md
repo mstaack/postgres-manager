@@ -65,7 +65,8 @@ curl -fsSL https://raw.githubusercontent.com/mstaack/postgres-manager/main/insta
 pgm receive forge@db1.example.com shop                  # → ./shop-db1-<timestamp>.dump
 pgm receive forge@db1.example.com shop -o ~/dumps/shop.dump
 
-# load it into a local PostgreSQL (Postgres.app, Homebrew, Docker, …)
+# load it into a local PostgreSQL (Postgres.app, Homebrew, Docker, …); servers on PostgreSQL 16+
+# send zstd-compressed dumps, so use pg_restore 16+ (it must be at least the server's version anyway)
 createdb shop_local && pg_restore --no-owner --no-acl -d shop_local shop-db1-*.dump
 
 # or push it to another server, e.g. staging
@@ -122,7 +123,7 @@ sudo pgm restore --set 20261105-013001F
 
 ### Send and receive databases over ssh
 
-`receive` runs `pgm db dump` on the server and streams the archive over ssh. `send` streams it into `pgm db load`, which creates the database and restores everything into it. The owner is the database name unless you pass `--owner`, and a missing owner is created with a generated password. Extensions are created as postgres, everything else is restored as the owner. Grants are not copied. `--no-sudo` runs pgm on the server without sudo. The target server's PostgreSQL must be the same major version or newer. See [On macOS](#on-macos-fetch-a-database-from-a-server) for examples.
+`receive` runs `pgm db dump` on the server and streams the archive over ssh (pg_dump custom format, zstd-compressed on PostgreSQL 16+, gzip before). `send` streams it into `pgm db load`, which creates the database and restores everything into it. The owner is the database name unless you pass `--owner`, and a missing owner is created with a generated password. Extensions are created as postgres, everything else is restored as the owner. Grants are not copied. `--no-sudo` runs pgm on the server without sudo. The target server's PostgreSQL must be the same major version or newer. See [On macOS](#on-macos-fetch-a-database-from-a-server) for examples.
 
 ### Tuning
 

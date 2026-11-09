@@ -85,3 +85,11 @@ func TestWriteSnippetAddsIncludeDirOnce(t *testing.T) {
 		t.Fatal("snippet content")
 	}
 }
+
+func TestDumpFormat(t *testing.T) {
+	for v, want := range map[string]string{"14": "-Fc", "15": "-Fc", "16": "-Fc --compress=zstd", "17": "-Fc --compress=zstd"} {
+		if got := strings.Join(Cluster{Version: v}.DumpFormat(), " "); got != want {
+			t.Errorf("%s: %q, want %q", v, got, want)
+		}
+	}
+}

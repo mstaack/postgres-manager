@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,12 @@ func TestTransfer(t *testing.T) {
 		ok(t, pm("receive", "root@localhost", "app", "-o", "/tmp/app.dump"), "receive app over ssh")
 		b, _ := os.ReadFile("/tmp/app.dump")
 		check(t, strings.HasPrefix(string(b), "PGDMP"), "the file is a pg_dump custom archive")
+		toc := run("", "/usr/lib/postgresql/"+pgv+"/bin/pg_restore", "-l", "/tmp/app.dump").out
+		if major, _ := strconv.Atoi(strings.SplitN(pgv, ".", 2)[0]); major >= 16 {
+			has(t, toc, "Compression: zstd", "PostgreSQL 16+ dumps are zstd-compressed")
+		} else {
+			hasNot(t, toc, "zstd", "PostgreSQL < 16 dumps use the default compression")
+		}
 		failed(t, pm("receive", "root@localhost", "nosuchdb", "-o", "/tmp/none.dump"), "receive fails for a missing database", "does not exist")
 		check(t, !exists("/tmp/none.dump.part"), "no partial file left")
 	})

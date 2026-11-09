@@ -29,6 +29,15 @@ func (c Cluster) Major() int {
 	return n
 }
 
+// DumpFormat returns pg_dump's archive arguments: custom format, zstd-compressed on
+// PostgreSQL 16+ (faster and smaller than the default gzip; pg_restore 16+ reads it).
+func (c Cluster) DumpFormat() []string {
+	if c.Major() >= 16 {
+		return []string{"-Fc", "--compress=zstd"}
+	}
+	return []string{"-Fc"}
+}
+
 // Bin is the path of a server binary of this version.
 func (c Cluster) Bin(tool string) string { return "/usr/lib/postgresql/" + c.Version + "/bin/" + tool }
 

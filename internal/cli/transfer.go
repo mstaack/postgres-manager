@@ -63,7 +63,7 @@ func (a *App) dbDump(ctx context.Context, name string) error {
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		return errors.New("stdout is a terminal — redirect it: pgm db dump " + name + " > " + name + ".dump")
 	}
-	return a.R.Stream(ctx, sys.Cmd{Name: a.PG.C.Bin("pg_dump"), Args: []string{"-p", strconv.Itoa(a.PG.C.Port), "-Fc", name}, AsPostgres: true})
+	return a.R.Stream(ctx, sys.Cmd{Name: a.PG.C.Bin("pg_dump"), Args: append(append([]string{"-p", strconv.Itoa(a.PG.C.Port)}, a.PG.C.DumpFormat()...), name), AsPostgres: true})
 }
 
 var extRE = regexp.MustCompile(`\bEXTENSION - (\S+)`)

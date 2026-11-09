@@ -400,7 +400,7 @@ func (a *App) restoreDB(ctx context.Context, info backup.Info, t backup.Target, 
 	}
 	u.Info("Dumping %s from the copy", o.DB)
 	if _, err := a.R.Run(ctx, sys.Cmd{Name: cl.Bin("pg_dump"), AsPostgres: true,
-		Args: []string{"-h", dir, "-p", strconv.Itoa(backup.DBRestorePort), "-Fc", "-f", dump, o.DB}}); err != nil {
+		Args: append(append([]string{"-h", dir, "-p", strconv.Itoa(backup.DBRestorePort)}, cl.DumpFormat()...), "-f", dump, o.DB)}); err != nil {
 		return err
 	}
 	if o.Replace {
