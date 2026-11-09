@@ -46,6 +46,15 @@ sudo pgm extensions enable pgvector --db shop --yes
 sudo pgm status
 ```
 
+### Servers that ran the old bash postgres-manager
+
+Installing pgm points the `postgres-manager` command at pgm. The old cron job keeps working through it: `cron-backup` uses the old settings until you run `sudo pgm setup`. Setup finds `/etc/postgres-manager/backup.conf` and takes over its repository, stanza, encryption passphrase, retention and schedule, so existing backups stay restorable. Then it removes `/etc/cron.d/postgres-manager` and renames the old settings to `backup.conf.migrated`. Until then, `pgm status` shows *old postgres-manager settings*.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mstaack/postgres-manager/main/install.sh | bash
+sudo pgm setup            # accept the prefilled values to keep the existing repository
+```
+
 ## On macOS: fetch a database from a server
 
 `pgm` on your Mac runs no PostgreSQL commands of its own. It streams a `pg_dump` archive from the server over ssh (`pgm receive`) or sends one back (`pgm send`). Your Mac needs ssh access to the server. The server needs pgm installed, and the ssh user must be root or allowed to run `sudo -n pgm`.
@@ -142,7 +151,7 @@ Passwords are sent to PostgreSQL over stdin, never as arguments. Statement loggi
 1. Create a bucket in the **EU jurisdiction** (the default in setup; *default* and *fedramp* are also offered). Setup derives the endpoint, e.g. `<account>.eu.r2.cloudflarestorage.com`.
 2. Create an R2 API token with **Object Read & Write** on that bucket only.
 3. Run `sudo pgm setup`, choose *Cloudflare R2* and enter the account ID (detected from app `.env` files when present), the bucket and the keys.
-4. Optionally keep a second, local copy (`/var/lib/pgbackrest`, 7 days by default): WAL is archived to both and every backup goes to both, so restores are fast and still work when R2 is unreachable.
+4. Optionally keep a second, local copy (7 days by default): WAL is archived to both and every backup goes to both, so restores are fast and still work when R2 is unreachable. The suggested directory is `pgbackrest` on the separate volume with the most free space (a mounted disk such as `/mnt/HC_Volume_…`), otherwise `/var/lib/pgbackrest`. You can edit it, and setup shows the free space and warns when it is on the database's disk.
 
 Backups are encrypted (AES-256) with a passphrase that setup generates and shows once. **Store it in a password manager.** Without it the backups cannot be restored. It is also kept in `/etc/postgres-manager/config.toml`, but that file is lost along with the server. `pgm edit` → *Show encryption passphrase* shows it again.
 
@@ -160,7 +169,7 @@ Backups are encrypted (AES-256) with a passphrase that setup generates and shows
 Defaults:
 - Cloudflare R2, EU jurisdiction.
 - A weekly full backup (Sunday 01:30) and a differential backup on the other days.
-- 30 days of point-in-time recovery.
+- 30 days of point-in-time recovery. Setup and `edit` offer presets: 7, 14 or 30 days, 3 months or 1 year for R2/S3; 3, 7, 14 or 30 days for local repositories; or any custom number of days.
 - `archive_timeout = 60s`, so at most about a minute of data is lost.
 - zstd compression and block-level incremental backups.
 - Asynchronous WAL push, with a local WAL queue capped at 8 GB.

@@ -3,7 +3,7 @@
 Status as of 2026-11-09. Merged into `main`; the `go-migration` branch and worktree are gone.
 
 ## Decisions (binding)
-- Rewrite from scratch in Go, binary `pgm` (+ `postgres-manager` symlink). The bash tool and its releases are ignored: no coexistence, no `backup.conf` import, no cron→timer migration, no bridge for the old `self-update`. `src/`, `settings.yml` and the generated bash script are deleted.
+- Rewrite from scratch in Go, binary `pgm` (+ `postgres-manager` symlink). The bash tool's releases are ignored (no bridge for its `self-update`), but `pgm setup` migrates a bash install: it imports `/etc/postgres-manager/backup.conf` (`config.ParseLegacy`), removes `/etc/cron.d/postgres-manager` and renames the old settings to `backup.conf.migrated` (`backup.RemoveLegacy`); until then `cron-backup` runs with the old settings. `src/`, `settings.yml` and the generated bash script are deleted.
 - Config: `/etc/postgres-manager/config.toml` (0600), R2 EU jurisdiction is the default repository; local directory and other S3 are alternatives; optional second (local) repository.
 - Scheduling: systemd timers (`pgm-backup-{full,diff,incr}.timer` → `pgm-backup@.service`); `/etc/cron.d/pgm` only on hosts without systemd (containers).
 - Extra features: `install`, `upgrade` (pg_upgradecluster --link + stanza-upgrade), single-database restore (`restore --db … [--as NAME | --replace]`), backups picked from a list.

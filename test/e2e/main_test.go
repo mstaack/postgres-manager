@@ -32,6 +32,7 @@ const pgmBin = "/usr/local/sbin/pgm"
 var (
 	pgv   string // PostgreSQL major version of the test cluster
 	pglog string // its server log
+	osID  string // debian | ubuntu
 )
 
 func TestMain(m *testing.M) {
@@ -136,6 +137,9 @@ func setup() error {
 		return err
 	}
 	if out, _ := os.ReadFile("/etc/os-release"); len(out) > 0 {
+		if m := regexp.MustCompile(`(?m)^ID="?([a-z]+)`).FindStringSubmatch(string(out)); m != nil {
+			osID = m[1]
+		}
 		if m := regexp.MustCompile(`(?m)^PRETTY_NAME="?([^"\n]*)`).FindStringSubmatch(string(out)); m != nil {
 			fmt.Printf("=== %s · PostgreSQL %s\n", m[1], pgv)
 		}

@@ -268,6 +268,10 @@ func (a *App) scheduleLine() string {
 func (a *App) statusBackups(ctx context.Context) {
 	u := a.UI
 	if !a.Configured {
+		if l := backup.LegacyLeftovers(); len(l) > 0 {
+			u.Row("Backups", u.Meh("old postgres-manager settings")+" · run: pgm setup to migrate ("+strings.Join(l, ", ")+")")
+			return
+		}
 		u.Row("Backups", u.Meh("not configured")+" · run: pgm setup")
 		return
 	}

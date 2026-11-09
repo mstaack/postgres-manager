@@ -103,6 +103,14 @@ func (a *App) cronBackup(ctx context.Context, typ string) error {
 	if err := validType(typ); err != nil {
 		return err
 	}
+	if !a.Configured {
+		// Until pgm setup runs, the bash postgres-manager's cron job calls this through the
+		// postgres-manager symlink: keep backing up with its settings and pgbackrest.conf.
+		if lc, ok, err := config.LoadLegacy(); err == nil && ok {
+			a.UI.Warn("Using the old postgres-manager settings (%s) — run: pgm setup", config.LegacyPath)
+			a.Cfg, a.Configured = lc, true
+		}
+	}
 	if err := a.requireConfigured(); err != nil {
 		return err
 	}
@@ -204,6 +212,15 @@ func (a *App) setup(ctx context.Context) error {
 		return fmt.Errorf("PostgreSQL %s must be running", c.ID())
 	}
 	cfg := a.Cfg
+	if !a.Configured {
+		if lc, ok, err := config.LoadLegacy(); err != nil {
+			u.Warn("Ignoring the old postgres-manager settings: %v", err)
+		} else if ok {
+			u.Info("Found the settings of the bash postgres-manager (%s): %s, stanza %s.", config.LegacyPath, lc.Repos[0].Label(), lc.Stanza)
+			u.Info("Setup takes them over (same repository and encryption passphrase), then replaces its cron job with pgm's schedule.")
+			cfg = lc
+		}
+	}
 	if a.Configured {
 		u.Warn("Backups are already configured (%s). Re-running setup keeps unchanged values.", a.repoLabels())
 		if ok, err := u.Confirm("Continue?", true); err != nil || !ok {
@@ -243,6 +260,9 @@ func (a *App) setup(ctx context.Context) error {
 	if err := a.promptRepo(&cfg.Repos[0]); err != nil {
 		return err
 	}
+	if err := a.editRetention(&cfg); err != nil {
+		return err
+	}
 	if cfg.Repos[0].Type != config.Posix {
 		if err := a.promptSecondRepo(&cfg); err != nil {
 			return err
@@ -265,7 +285,7 @@ func (a *App) setup(ctx context.Context) error {
 		return err
 	}
 	if !ok {
-		for _, f := range []func(*config.Config) error{a.editSchedule, a.editRetention, a.editRPO, a.editPerformance} {
+		for _, f := range []func(*config.Config) error{a.editSchedule, a.editRPO, a.editPerformance} {
 			if err := f(&cfg); err != nil {
 				return err
 			}
@@ -322,6 +342,13 @@ func (a *App) setup(ctx context.Context) error {
 		return err
 	}
 	u.OK("Schedule (%s): %s", how, a.scheduleLine())
+	done, err := backup.RemoveLegacy()
+	for _, d := range done {
+		u.OK("Old postgres-manager: %s", d)
+	}
+	if err != nil {
+		u.Warn("Old postgres-manager leftovers: %v", err)
+	}
 
 	if archiving {
 		if ok, err := u.Confirm("Run the first full backup now?", true); err != nil {
@@ -446,10 +473,7 @@ func (a *App) promptRepo(r *config.Repo) error {
 		}
 	}
 	if r.Type == config.Posix {
-		if r.Path == "" || prev != config.Posix {
-			r.Path = backup.DefaultLocalDir
-		}
-		if r.Path, err = u.Ask("Repository directory", r.Path); err != nil {
+		if r.Path, err = a.askLocalDir("Repository directory", r.Path, r.Path == "" || prev != config.Posix); err != nil {
 			return err
 		}
 	} else {
@@ -569,13 +593,10 @@ func (a *App) promptSecondRepo(cfg *config.Config) error {
 	if has {
 		r = cfg.Repos[1]
 	}
-	if r.Path, err = u.Ask("Local repository directory", r.Path); err != nil {
+	if r.Path, err = a.askLocalDir("Local repository directory", r.Path, !has); err != nil {
 		return err
 	}
-	if !strings.HasPrefix(r.Path, "/") {
-		return errors.New("the local repository directory must be absolute")
-	}
-	if r.Retention, err = u.AskInt("Retention of the local copy in days", max(r.Retention, 1), 1, 3650); err != nil {
+	if r.Retention, err = a.pickRetention("Retention of the local copy", localRetention, max(r.Retention, 1)); err != nil {
 		return err
 	}
 	cfg.Repos = append(cfg.Repos[:1], r)
@@ -711,11 +732,98 @@ func (a *App) editCustomSchedule(cfg *config.Config) error {
 	return nil
 }
 
+// Retention presets in days: longer for R2/S3, shorter for local disks.
+var (
+	remoteRetention = []int{7, 14, 30, 90, 365}
+	localRetention  = []int{3, 7, 14, 30}
+)
+
+func retentionLabel(days int) string {
+	human := map[int]string{3: "3 days", 7: "1 week", 14: "2 weeks", 30: "1 month", 90: "3 months", 365: "1 year"}[days]
+	return fmt.Sprintf("%3d days  %s", days, human)
+}
+
+// pickRetention offers presets and a custom value; the current value is the default.
+func (a *App) pickRetention(title string, presets []int, cur int) (int, error) {
+	labels := make([]string, 0, len(presets)+1)
+	def := len(presets)
+	for i, d := range presets {
+		labels = append(labels, retentionLabel(d))
+		if d == cur {
+			def = i
+		}
+	}
+	custom := "Custom"
+	if def == len(presets) {
+		custom = fmt.Sprintf("Custom (now %d days)", cur)
+	}
+	i, err := a.UI.Choose(title, append(labels, custom), def)
+	if err != nil {
+		return 0, err
+	}
+	if i < len(presets) {
+		return presets[i], nil
+	}
+	return a.UI.AskInt(title+" in days", cur, 1, 3650)
+}
+
 func (a *App) editRetention(cfg *config.Config) error {
 	a.UI.Info("Point-in-time recovery stays possible for at least this many days (older backups + WAL expire).")
-	v, err := a.UI.AskInt("Retention in days", cfg.Retention, 1, 3650)
+	presets := remoteRetention
+	if cfg.Repos[0].Type == config.Posix {
+		presets = localRetention
+	}
+	v, err := a.pickRetention("Retention", presets, cfg.Retention)
 	cfg.Retention = v
 	return err
+}
+
+// mounts lists the writable storage filesystems with their free space.
+func (a *App) mounts() []backup.Mount {
+	b, err := os.ReadFile("/proc/self/mounts")
+	if err != nil {
+		return nil
+	}
+	var ms []backup.Mount
+	for _, m := range backup.ParseMounts(string(b)) {
+		if fi, err := os.Stat(m.Path); err != nil || !fi.IsDir() { // containers bind-mount files (/etc/hosts)
+			continue
+		}
+		m.Free, _ = sys.FreeBytes(m.Path)
+		ms = append(ms, m)
+	}
+	return ms
+}
+
+// askLocalDir asks for a local repository directory. A new one is suggested on the
+// volume with the most free space apart from the database's; the answer is described
+// (free space, same disk as the database).
+func (a *App) askLocalDir(title, cur string, fresh bool) (string, error) {
+	u := a.UI
+	ms := a.mounts()
+	if fresh || cur == "" {
+		cur = backup.SuggestLocalDir(ms, a.PG.C.DataDir)
+	}
+	p, err := u.Ask(title, cur)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(p, "/") {
+		return "", errors.New("the repository directory must be an absolute path")
+	}
+	p = filepath.Clean(p)
+	m := backup.MountOf(ms, p)
+	for _, x := range ms {
+		if x.Path != m {
+			continue
+		}
+		if dm := backup.MountOf(ms, a.PG.C.DataDir); dm == m {
+			u.Warn("%s is on the database's disk (%s free): fast restores, but it does not survive a disk failure", p, format.Bytes(x.Free))
+		} else {
+			u.Info("%s: %s free on %s", p, format.Bytes(x.Free), m)
+		}
+	}
+	return p, nil
 }
 
 func (a *App) editRPO(cfg *config.Config) error {
