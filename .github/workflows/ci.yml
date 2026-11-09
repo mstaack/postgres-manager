@@ -1,5 +1,8 @@
 name: CI
 
+# Every push to main that passes the tests and changes the Go code is released:
+# the next patch version is tagged (or minor/major with "[minor]"/"[major]" in a commit
+# message since the last release) and goreleaser publishes the binaries.
 on:
   push:
     branches: [main]
@@ -8,7 +11,7 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   lint:
@@ -19,26 +22,76 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./...
+      - run: go vet -tags e2e ./...
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.4.0
-      - run: go test ./...
+      - run: go test -race ./...
+      - name: Cross-compile (Linux, macOS)
+        run: make build-all VERSION=ci
 
-  test:
+  e2e:
     name: E2E ${{ matrix.image }}
     needs: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         image: ['debian:12', 'debian:13', 'ubuntu:22.04', 'ubuntu:24.04']
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: make build ARCH=amd64
-      - name: Test suites in ${{ matrix.image }}
-        run: bash test/run.sh '${{ matrix.image }}'
+      - run: go test -tags e2e -count=1 -v -timeout 35m ./test/e2e
+        env:
+          E2E_IMAGES: ${{ matrix.image }}
+
+  release:
+    name: Release
+    needs: [lint, e2e]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Next version
+        id: version
+        run: |
+          last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v0.0.0)
+          if [ "$last" != v0.0.0 ] && git diff --quiet "$last" HEAD -- cmd internal go.mod go.sum .goreleaser.yaml; then
+            echo "No code changes since $last — nothing to release"
+            exit 0
+          fi
+          IFS=. read -r major minor patch <<<"${last#v}"
+          log=$(git log --format=%B "$last..HEAD" 2>/dev/null || git log --format=%B)
+          if grep -q '\[major\]' <<<"$log"; then major=$((major + 1)) minor=0 patch=0
+          elif grep -q '\[minor\]' <<<"$log"; then minor=$((minor + 1)) patch=0
+          else patch=$((patch + 1)); fi
+          echo "tag=v$major.$minor.$patch" >>"$GITHUB_OUTPUT"
+          echo "Releasing v$major.$minor.$patch (previous: $last)"
+      - name: Tag
+        if: steps.version.outputs.tag
+        run: |
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+      - uses: actions/setup-go@v5
+        if: steps.version.outputs.tag
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        if: steps.version.outputs.tag
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

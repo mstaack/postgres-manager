@@ -1,6 +1,6 @@
 # Handoff — Go rewrite (`pgm`), first draft
 
-Status as of 2026-11-06. Branch `go-migration`.
+Status as of 2026-11-09. Merged into `main`; the `go-migration` branch and worktree are gone.
 
 ## Decisions (binding)
 - Rewrite from scratch in Go, binary `pgm` (+ `postgres-manager` symlink). The bash tool and its releases are ignored: no coexistence, no `backup.conf` import, no cron→timer migration, no bridge for the old `self-update`. `src/`, `settings.yml` and the generated bash script are deleted.
@@ -16,15 +16,20 @@ Status as of 2026-11-06. Branch `go-migration`.
 - Release plumbing: `.goreleaser.yaml` (binaries `pgm-linux-{amd64,arm64}` + `checksums.txt`), `.github/workflows/release.yml` on `v*` tags, `install.sh`, `self-update` against the GitHub releases API. No release has been published yet.
 
 ## Added after 0.0.1
-- macOS builds (`pgm-darwin-{arm64,amd64}`): `pgm receive HOST DB` / `pgm send FILE HOST` stream pg_dump archives over ssh into/out of `pgm db dump/load` on the server (e2e `60-transfer` via sshd in the container). Server commands refuse to run on macOS.
-- `pgm tune`: pgtune-style settings in `conf.d/92-postgres-manager-tuning.conf` (e2e `65-tune`).
+- macOS builds (`pgm-darwin-{arm64,amd64}`): `pgm receive HOST DB` / `pgm send FILE HOST` stream pg_dump archives over ssh into/out of `pgm db dump/load` on the server (e2e `TestTransfer` via sshd in the container). Server commands refuse to run on macOS.
+- `pgm tune`: pgtune-style settings in `conf.d/92-postgres-manager-tuning.conf` (e2e `TestTune`).
+
+## Finalized 2026-11-09
+- Bash e2e suites ported to Go (`test/e2e`, build tag `e2e`); `install.sh` is the only shell script left. VERSION file removed: versions come from git tags.
+- CI releases automatically: every green push to `main` that touches Go code gets the next patch tag (`[minor]`/`[major]` in a commit message) and a goreleaser release; `release.yml` is gone.
+- `self-update` installs only newer releases (`--force` reinstalls), `--check` reports, a missing write permission says to use sudo; unit-tested against an httptest release server.
+- `install.sh` works as `curl … | bash` (sudo only when needed), `PGM_VERSION`/`PGM_DIR`.
 
 ## Not verified yet
-- The macOS binaries on a real Mac (cross-compiled; Go ad-hoc signs darwin/arm64).
+- The macOS amd64 binary on a real Intel Mac (darwin/arm64 0.0.2 installed via install.sh and ran on Apple Silicon).
 - Cloudflare R2 / S3 repositories against a real bucket (only the rendered config is unit-tested).
 - systemd timers on a real systemd host (unit files pass `systemd-analyze verify`; the e2e containers use the cron fallback).
 - `pgm install` on a server without PostgreSQL (no e2e suite yet), TimescaleDB/PostGIS/pg_cron package installs, arm64.
-- `self-update`/`install.sh` until a first release exists.
 
 ## Known gaps / ideas
 - Single-database restore does not copy database-level grants (read-only users' `CONNECT`); it prints a hint to re-run `pgm user grant`.

@@ -6,26 +6,72 @@ A PostgreSQL manager for a single Debian/Ubuntu server: install PostgreSQL, data
 
 ## Install
 
-One line on the server — or on your Mac to send and receive dumps (Linux amd64/arm64, macOS Apple Silicon/Intel; downloads the latest release and checks its sha256):
+One line, on the server or on your Mac (Linux amd64/arm64, macOS Apple Silicon/Intel). It downloads the latest release, checks its sha256 and uses sudo only if it has to:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mstaack/postgres-manager/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/mstaack/postgres-manager/main/install.sh | bash
 ```
 
-Then run `sudo pgm`. On Linux this installs `/usr/local/sbin/pgm` and a `postgres-manager` symlink, on macOS `/usr/local/bin/pgm`. Update later with `sudo pgm self-update`. No PostgreSQL yet? `sudo pgm install` installs a major version and creates a running cluster.
-
-Without the script (pick `amd64` or `arm64`):
+This installs `/usr/local/sbin/pgm` (plus a `postgres-manager` symlink) on Linux and `/usr/local/bin/pgm` on macOS. Pin a version with `PGM_VERSION=0.0.3`, or pick another directory with `PGM_DIR=~/.local/bin`:
 
 ```bash
-sudo curl -fsSL https://github.com/mstaack/postgres-manager/releases/latest/download/pgm-linux-amd64 -o /usr/local/sbin/pgm && sudo chmod +x /usr/local/sbin/pgm && sudo pgm
+curl -fsSL https://raw.githubusercontent.com/mstaack/postgres-manager/main/install.sh | PGM_VERSION=0.0.3 bash
 ```
+
+### Updates
+
+```bash
+sudo pgm self-update           # newest release, sha256-verified, replaced atomically
+pgm self-update --check        # only report whether one exists
+```
+
+Each push to `main` that passes CI becomes a release, so `self-update` is all a server ever needs.
+
+## On a Debian/Ubuntu server
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mstaack/postgres-manager/main/install.sh | bash
+sudo pgm install          # only if PostgreSQL is not installed yet: picks a major version, creates a running cluster
+sudo pgm                  # status dashboard + menu
+sudo pgm setup            # backups: R2/S3/local repository, encryption, WAL archiving, timers, first full backup
+sudo pgm tune             # optional: memory/WAL/planner settings for this machine
+```
+
+Everything in the menu is also a command with flags, for scripts and provisioning:
+
+```bash
+sudo pgm db create shop                              # database + owner with a generated password (shown once)
+sudo pgm user create metabase --read-only shop       # read-only user
+sudo pgm extensions enable pgvector --db shop --yes
+sudo pgm status
+```
+
+## On macOS: fetch a database from a server
+
+`pgm` on your Mac runs no PostgreSQL commands of its own. It streams a `pg_dump` archive from the server over ssh (`pgm receive`) or sends one back (`pgm send`). Your Mac needs ssh access to the server. The server needs pgm installed, and the ssh user must be root or allowed to run `sudo -n pgm`.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mstaack/postgres-manager/main/install.sh | bash
+
+pgm receive forge@db1.example.com shop                  # → ./shop-db1-<timestamp>.dump
+pgm receive forge@db1.example.com shop -o ~/dumps/shop.dump
+
+# load it into a local PostgreSQL (Postgres.app, Homebrew, Docker, …)
+createdb shop_local && pg_restore --no-owner --no-acl -d shop_local shop-db1-*.dump
+
+# or push it to another server, e.g. staging
+pgm send shop-db1-20261106-1004.dump forge@db2.example.com --as shop_staging
+```
+
+To allow a non-root ssh user such as `forge` to run only dumps, add this with `visudo -f /etc/sudoers.d/pgm` on the server:
+
+```
+forge ALL=(root) NOPASSWD: /usr/local/sbin/pgm db dump *
+```
+
+(Add `/usr/local/sbin/pgm db load *` as well for `pgm send`.)
 
 ## Usage
-
-```
-sudo pgm              status dashboard + interactive menu
-sudo pgm setup        configure backups + WAL archiving
-```
 
 The menu has sections for **Databases**, **Users & access**, **Extensions**, **Backups & restore** and **PostgreSQL versions**. **ESC** cancels the current action and returns to the menu (in a menu it goes back one level). Every command is also scriptable through flags.
 
@@ -46,7 +92,7 @@ The menu has sections for **Databases**, **Users & access**, **Extensions**, **B
 | `upgrade [VERSION]` | Major upgrade with `pg_upgradecluster --link`: full backup first, extension packages for the new version, `stanza-upgrade`, a new full backup, `vacuumdb --analyze-in-stages`. `upgrade --drop-old` removes the old cluster afterwards |
 | `tune` | pgtune-style tuning from RAM, CPUs, SSD/HDD and the workload (web, OLTP, analytics, mixed): memory, WAL, planner and parallelism settings, shown as current vs recommended and written to `conf.d`. Gives PostgreSQL half the RAM when apps run on the same server. `--dry-run`, `--memory 8GB`, `--remove` |
 | `receive HOST DB` / `send FILE HOST` | Copy a database over ssh — from any machine with ssh, including macOS: download a dump of a server database, or load a dump into a server (`--as NAME`, `--replace`) |
-| `self-update` | Install the latest release from GitHub |
+| `self-update [--check]` | Install the newest release from GitHub (sha256-verified); `--check` only reports |
 
 ### Restore examples
 
@@ -65,15 +111,9 @@ sudo pgm restore --db shop --set 20261105-013001F --replace
 sudo pgm restore --set 20261105-013001F
 ```
 
-### Send and receive databases over ssh (macOS or Linux)
+### Send and receive databases over ssh
 
-```bash
-pgm receive forge@db1.example.com shop                  # → shop-db1-<timestamp>.dump on your Mac
-pgm send shop-db1-20261106-1004.dump forge@db2.example.com --as shop_staging
-pgm send shop.dump root@db2 --replace                   # the current shop is kept as shop_old_<timestamp>
-```
-
-`receive` runs `pgm db dump` on the server and streams the archive over ssh; `send` streams it into `pgm db load`, which creates the database (owner = database name unless `--owner`, created with a generated password if missing), creates the extensions as postgres and restores everything else as the owner. Grants are not copied. The server needs pgm, and the ssh user must be root or allowed to run `sudo -n pgm` (`--no-sudo` for neither). Your Mac needs no PostgreSQL. The target server's PostgreSQL must be the same or a newer major version.
+`receive` runs `pgm db dump` on the server and streams the archive over ssh. `send` streams it into `pgm db load`, which creates the database and restores everything into it. The owner is the database name unless you pass `--owner`, and a missing owner is created with a generated password. Extensions are created as postgres, everything else is restored as the owner. Grants are not copied. `--no-sudo` runs pgm on the server without sudo. The target server's PostgreSQL must be the same major version or newer. See [On macOS](#on-macos-fetch-a-database-from-a-server) for examples.
 
 ### Tuning
 
@@ -139,14 +179,19 @@ Set a heartbeat URL (for example [healthchecks.io](https://healthchecks.io) or U
 
 ## Development
 
-Go (see `go.mod`), one package per domain under `internal/`; see `AGENTS.md` for the layout and rules.
+Go (see `go.mod`), one package per domain under `internal/`; see `AGENTS.md` for the layout and rules. No shell scripts besides `install.sh`.
 
 ```bash
-make build   # dist/pgm-linux-<arch>
-make unit    # go test ./...
-make lint    # go vet + golangci-lint (Docker)
-make test    # e2e suites on Debian 12/13 and Ubuntu 22.04/24.04 (Docker)
-make test DISTROS=debian:12 SUITES="users menu"   # a subset
+make build       # dist/pgm-linux-<arch>
+make build-all   # Linux + macOS, amd64 + arm64
+make unit        # go test ./...
+make lint        # go vet + golangci-lint (Docker)
+make test        # e2e on Debian 12/13 and Ubuntu 22.04/24.04 (Docker)
+make test DISTROS=debian:12 RUN='Users|Menu'   # a subset
 ```
 
-The e2e tests (`test/`) run in throwaway containers: `container.sh` installs PostgreSQL, the binary and a Forge-style app fixture, then runs `test/suites/*.sh` (cli, extensions, databases, users, menu, backups) with the assertions from `test/lib.sh`. Releases are built by goreleaser on `v*` tags.
+The e2e tests (`test/e2e`, build tag `e2e`) are Go tests. On the host, `go test -tags e2e ./test/e2e` cross-compiles pgm and the test binary for Linux. It then runs the test binary as root in a throwaway container per image (labelled `postgres-manager-test=1`). That binary installs PostgreSQL, pgm and a Forge-style app fixture, then runs the suites in file order: cli, extensions, databases, users, menu (including pty ESC and secret input), ssh transfer, tune, backups (setup, PITR, drill, second repository, single-database and live restore) and major upgrade.
+
+### Releases
+
+CI (`.github/workflows/ci.yml`) runs vet, golangci-lint, unit tests, a cross-compile and the e2e matrix on every push and pull request. After a green push to `main` that touches the Go code, it tags the next version and goreleaser publishes `pgm-{linux,darwin}-{amd64,arm64}` and `checksums.txt`. The next version is the next patch by default, or the next minor or major when a commit since the last release contains `[minor]` or `[major]`. `install.sh` and `pgm self-update` install from these releases. Versions come from git tags (`git describe`); there is no VERSION file.

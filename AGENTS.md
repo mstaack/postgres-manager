@@ -17,12 +17,13 @@ Go CLI (`pgm`) that manages PostgreSQL on Debian/Ubuntu servers: a status dashbo
 - `internal/config`: `/etc/postgres-manager/config.toml`. `internal/backup`: pgbackrest.conf/snippet/schedule/standalone renderers, pgBackRest runs, restores.
 - `internal/tune`: pgtune-style recommendations (pure). `internal/cli/transfer.go`: `db dump/load` and the ssh client commands `receive`/`send` (annotated `pgm/local`: no root, no PostgreSQL; the only commands besides `self-update` that run on macOS).
 - `internal/ext`: extension catalog (data). `internal/apt`: packages and repositories. `internal/format`: value formatting.
-- `test/run.sh`: end-to-end test in a throwaway container. `docs/superpowers/`: migration plans and handoff notes.
+- `test/e2e`: end-to-end Go tests (build tag `e2e`): on the host `TestMain` cross-compiles pgm and itself and runs in a throwaway container per image, where the tests run as root in file order. `os/exec` is fine there (test harness, not product). `docs/superpowers/`: migration plans and handoff notes.
+- `install.sh` is the only shell script. `.github/workflows/ci.yml`: lint, unit, e2e matrix, then auto-release (next patch tag, `[minor]`/`[major]` in a commit message) + goreleaser on green pushes to `main`. Versions come from git tags; no VERSION file.
 
 ## Commands
-- `make build`: `dist/pgm-linux-$(ARCH)` (static, `CGO_ENABLED=0`).
+- `make build`: `dist/pgm-linux-$(ARCH)` (static, `CGO_ENABLED=0`). `make build-all`: Linux + macOS.
 - `make unit`: `go test ./...`. `make lint`: `go vet` + golangci-lint v2 in Docker; must stay clean.
-- `make test`: e2e on `DISTROS`; a single distro: `bash test/run.sh debian:12 [suites…]` after `make build`.
+- `make test`: e2e on `DISTROS`; a subset: `make test DISTROS=debian:12 RUN='Users|Menu'` (needs Docker; `Upgrade` needs `Backups` first).
 - Test containers carry `--label postgres-manager-test=1`. To clean up, kill only labelled containers or a specific id, **never** `docker kill $(docker ps -q)`: other projects' containers run on this machine.
 
 ## Design rules
