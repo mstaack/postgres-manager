@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -165,7 +166,7 @@ func (i Info) RepoDelta() int64 {
 	return n
 }
 
-// ForRepo narrows the info to repository key (1-based): its sets, WAL ranges and status.
+// ForRepo narrows the info to repository key (1-based): its sets and status.
 // Without a per-repo status (one repository, older pgBackRest) the stanza status is kept.
 func (i Info) ForRepo(key int) Info {
 	out := Info{Name: i.Name, Status: i.Status}
@@ -177,11 +178,6 @@ func (i Info) ForRepo(key int) Info {
 	for _, s := range i.Backup {
 		if s.Database.RepoKey == key {
 			out.Backup = append(out.Backup, s)
-		}
-	}
-	for _, a := range i.Arch {
-		if a.Database.RepoKey == key {
-			out.Arch = append(out.Arch, a)
 		}
 	}
 	return out
@@ -199,18 +195,24 @@ func (i Info) Find(label string) (Set, bool) {
 	return found, ok
 }
 
-// Backup runs one backup of type typ to every repository, one after the other.
+// Backup runs one backup of type typ to every repository, one after the other. A failing
+// repository does not stop the others (the local copy must survive an R2 outage); the
+// errors are joined.
 func (b Pgbr) Backup(ctx context.Context, typ string, repos int) error {
+	var errs []error
 	for n := 1; n <= repos; n++ {
 		args := []string{"--type=" + typ, "--log-level-console=info", "backup"}
 		if repos > 1 {
 			args = append([]string{fmt.Sprintf("--repo=%d", n)}, args...)
 		}
 		if err := b.Stream(ctx, args...); err != nil {
-			return err
+			if ctx.Err() != nil || repos == 1 {
+				return err
+			}
+			errs = append(errs, fmt.Errorf("repo%d: %w", n, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // UserAgent identifies heartbeat pings; Go's default "Go-http-client" is blocked by
@@ -248,7 +250,14 @@ func Heartbeat(ctx context.Context, url, suffix, body string) error {
 			err = fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
 		last = err
-		time.Sleep(time.Second)
+		if try == 2 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 	return last
 }

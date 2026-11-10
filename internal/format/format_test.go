@@ -3,7 +3,7 @@ package format
 import "testing"
 
 func TestFormat(t *testing.T) {
-	bytes := map[int64]string{0: "0B", 512: "512B", 1024: "1KiB", 1536: "1.5KiB", 1073741824: "1GiB", 1610612736: "1.5GiB"}
+	bytes := map[int64]string{0: "0B", 512: "512B", 1024: "1KiB", 1536: "1.5KiB", 1073741824: "1GiB", 1610612736: "1.5GiB", 1048575: "1MiB"}
 	for in, want := range bytes {
 		if got := Bytes(in); got != want {
 			t.Errorf("Bytes(%d)=%s want %s", in, got, want)

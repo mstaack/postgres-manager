@@ -31,6 +31,10 @@ func TestQuote(t *testing.T) {
 	if Ident(`a"b`) != `"a""b"` || Lit("it's") != `'it''s'` {
 		t.Fatal("quoting")
 	}
+	// A backslash must not escape the closing quote when standard_conforming_strings is off.
+	if got := Lit(`x\'; drop`); got != `E'x\\''; drop'` {
+		t.Fatalf("Lit with backslash: %s", got)
+	}
 	for _, ok := range []string{"shop", "_x1", strings.Repeat("a", 63)} {
 		if !ValidName(ok) {
 			t.Errorf("%q should be valid", ok)

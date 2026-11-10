@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,9 +30,10 @@ import (
 func (a *App) dumpCmd() *cobra.Command {
 	return &cobra.Command{
 		Use: "dump NAME", Args: cobra.ExactArgs(1),
-		Short:   "Write a pg_dump (custom format) of a database to stdout",
-		Example: "  pgm db dump shop > shop.dump",
-		RunE:    func(cmd *cobra.Command, args []string) error { return a.dbDump(cmd.Context(), args[0]) },
+		Short:       "Write a pg_dump (custom format) of a database to stdout",
+		Example:     "  pgm db dump shop > shop.dump",
+		Annotations: map[string]string{annPipe: "1"},
+		RunE:        func(cmd *cobra.Command, args []string) error { return a.dbDump(cmd.Context(), args[0]) },
 	}
 }
 
@@ -43,6 +45,7 @@ func (a *App) loadCmd() *cobra.Command {
 		Short: "Create a database from a pg_dump (custom format) read from stdin",
 		Example: `  pgm db load shop < shop.dump
   pgm db load shop --replace --yes < shop.dump   # the current shop is kept as shop_old_<timestamp>`,
+		Annotations: map[string]string{annPipe: "1"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.dbLoad(cmd.Context(), args[0], owner, replace, yes)
 		},
@@ -124,8 +127,26 @@ func (a *App) dbLoad(ctx context.Context, name, owner string, replace, yes bool)
 		}
 		u.OK("Created user %s", owner)
 	}
+	if err := a.loadInto(ctx, name, owner, spool, toc, stamp, exists); err != nil {
+		if password != "" {
+			a.roleKept(ctx, owner, password, true)
+		}
+		return err
+	}
+	u.OK("Loaded %s", name)
+	if password != "" {
+		a.showCredentials(ctx, owner, password, name, true)
+	}
+	return nil
+}
+
+// loadInto creates database name (keeping an existing one as name_old_<stamp>) and
+// restores the spooled dump into it.
+func (a *App) loadInto(ctx context.Context, name, owner, spool, toc, stamp string, exists bool) error {
+	u := a.UI
+	old := ""
 	if exists {
-		old := name + "_old_" + stamp
+		old = name + "_old_" + stamp
 		if err := a.PG.Exec(ctx, "postgres", "select pg_terminate_backend(pid) from pg_stat_activity where datname = "+pg.Lit(name)+" and pid <> pg_backend_pid()"); err != nil {
 			return err
 		}
@@ -143,15 +164,35 @@ func (a *App) dbLoad(ctx context.Context, name, owner string, replace, yes bool)
 		}
 	}
 	u.Info("Restoring into %s (owner %s)", name, owner)
-	if _, err := a.R.Run(ctx, sys.Cmd{Name: a.PG.C.Bin("pg_restore"), AsPostgres: true,
-		Args: []string{"-p", strconv.Itoa(a.PG.C.Port), "-d", name, "--no-owner", "--no-acl", "--role=" + owner, spool}}); err != nil {
-		u.Warn("pg_restore reported errors (often extension comments or missing extensions): %v", err)
+	return a.pgRestore(ctx, name, old, "often extension comments or missing extensions",
+		"-p", strconv.Itoa(a.PG.C.Port), "-d", name, "--no-owner", "--no-acl", "--role="+owner, spool)
+}
+
+// pgRestore loads a dump into the freshly created database target. pg_restore exits
+// non-zero both when it skipped single objects ("errors ignored on restore", a warning)
+// and when it failed outright. After an outright failure the incomplete database is
+// dropped and old ("" = none), the previous database, gets its name back.
+func (a *App) pgRestore(ctx context.Context, target, old, hint string, args ...string) error {
+	_, err := a.R.Run(ctx, sys.Cmd{Name: a.PG.C.Bin("pg_restore"), AsPostgres: true, Args: args})
+	if err == nil {
+		return nil
 	}
-	u.OK("Loaded %s", name)
-	if password != "" {
-		a.showCredentials(ctx, owner, password, name, true)
+	var ee *sys.ExitError
+	if errors.As(err, &ee) && strings.Contains(ee.Stderr, "errors ignored on restore") {
+		a.UI.Warn("pg_restore skipped some objects (%s): %v", hint, err)
+		return nil
 	}
-	return nil
+	bg := context.WithoutCancel(ctx)
+	if derr := access.DropDatabase(bg, a.PG, target); derr != nil {
+		return fmt.Errorf("pg_restore failed and the incomplete %s could not be dropped (%v): %w", target, derr, err)
+	}
+	if old != "" {
+		if rerr := a.PG.Exec(bg, "postgres", "alter database "+pg.Ident(old)+" rename to "+pg.Ident(target)); rerr != nil {
+			return fmt.Errorf("pg_restore failed; the previous database is still named %s (%v): %w", old, rerr, err)
+		}
+		a.UI.Warn("pg_restore failed — the previous %s is back in place", target)
+	}
+	return fmt.Errorf("pg_restore failed, nothing was loaded: %w", err)
 }
 
 // ---- client side (any OS with ssh) ----
@@ -196,9 +237,14 @@ func (a *App) sendCmd() *cobra.Command {
 	return cmd
 }
 
-// remoteArgs builds the ssh command line for `pgm args…` on host.
-func remoteArgs(host string, noSudo bool, args ...string) []string {
-	remote := append([]string{"pgm"}, args...)
+// remoteArgs builds the ssh command line for `pgm args…` on host (cluster "" = the
+// server's default).
+func remoteArgs(host, cluster string, noSudo bool, args ...string) []string {
+	remote := []string{"pgm"}
+	if cluster != "" {
+		remote = append(remote, "--cluster", cluster)
+	}
+	remote = append(remote, args...)
 	if !noSudo && !strings.HasPrefix(host, "root@") {
 		remote = append([]string{"sudo", "-n"}, remote...)
 	}
@@ -209,6 +255,9 @@ func hostLabel(host string) string {
 	h := host
 	if i := strings.LastIndex(h, "@"); i >= 0 {
 		h = h[i+1:]
+	}
+	if net.ParseIP(h) != nil { // keep an address whole: "10.0.0.5" is not host "10"
+		return strings.ReplaceAll(h, ":", "-")
 	}
 	return strings.SplitN(h, ".", 2)[0]
 }
@@ -232,7 +281,7 @@ func (a *App) receive(ctx context.Context, host, db, out string, noSudo bool) er
 	defer func() { _ = os.Remove(part) }()
 	a.UI.Info("Receiving %s from %s", db, host)
 	w := bufio.NewWriterSize(f, 1<<20)
-	err = a.R.Stream(ctx, sys.Cmd{Name: "ssh", Args: remoteArgs(host, noSudo, "db", "dump", db), Stdout: w})
+	err = a.R.Stream(ctx, sys.Cmd{Name: "ssh", Args: remoteArgs(host, a.cluster, noSudo, "db", "dump", db), Stdout: w})
 	if ferr := w.Flush(); err == nil {
 		err = ferr
 	}
@@ -296,7 +345,7 @@ func (a *App) send(ctx context.Context, file, host, as, owner string, replace, y
 	}
 	defer func() { _ = f.Close() }()
 	a.UI.Info("Sending %s to %s as %s", file, host, as)
-	if err := a.R.Stream(ctx, sys.Cmd{Name: "ssh", Args: remoteArgs(host, noSudo, args...), Stdin: bufio.NewReaderSize(f, 1<<20)}); err != nil {
+	if err := a.R.Stream(ctx, sys.Cmd{Name: "ssh", Args: remoteArgs(host, a.cluster, noSudo, args...), Stdin: bufio.NewReaderSize(f, 1<<20)}); err != nil {
 		return sshHint(err, host)
 	}
 	return nil

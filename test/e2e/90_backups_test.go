@@ -130,6 +130,22 @@ func TestBackups(t *testing.T) {
 		ok(t, pm("verify"), "verify")
 	})
 
+	// A copy must never restore tablespaces to their original paths: those are the live cluster's.
+	t.Run("restore drill with a tablespace", func(t *testing.T) {
+		run("", "install", "-d", "-o", "postgres", "-g", "postgres", "/var/lib/postgresql/ts1")
+		sql("postgres", "create tablespace ts1 location '/var/lib/postgresql/ts1'")
+		sql("app", "create table ts_t tablespace ts1 as select g from generate_series(1, 1000) g")
+		ok(t, pm("backup", "incr"), "backup incr with the tablespace")
+		sql("app", "insert into ts_t select g from generate_series(1001, 2000) g")
+		r := pm("verify")
+		ok(t, r, "verify with a tablespace")
+		hasNot(t, r.out, "missing", "the copy has every database")
+		eq(t, "2000", sql("app", "select count(*) from ts_t"), "the live tablespace is untouched")
+		check(t, !exists("/var/lib/postgresql/pgm-verify-"+pgv+"-main-tablespaces"), "the copy's tablespaces are removed")
+		sql("app", "drop table ts_t")
+		sql("postgres", "drop tablespace ts1")
+	})
+
 	t.Run("point-in-time copy", func(t *testing.T) {
 		ok(t, pm("restore", "--time", target, "--target-dir", "/var/lib/postgresql/pitr", "--yes"), "restore --time --target-dir")
 		eq(t, "100500", pitrSQL("select count(*) from t"), "copy has exactly the rows before the target time")

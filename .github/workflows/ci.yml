@@ -94,3 +94,12 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # A tag without a release would be skipped forever ("no code changes since <tag>"):
+      # take both back so the next run retries the same version.
+      - name: Undo the tag when the release failed
+        if: failure() && steps.version.outputs.tag
+        run: |
+          gh release delete "${{ steps.version.outputs.tag }}" --yes --cleanup-tag 2>/dev/null ||
+            git push --delete origin "${{ steps.version.outputs.tag }}" || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
@@ -145,6 +146,32 @@ func (c Config) Save() error {
 		return err
 	}
 	return sys.WriteFileAtomic(Path, b.Bytes(), 0o600, -1, -1)
+}
+
+// Clone copies the config including its repositories, so editing the copy never
+// changes the original (a plain struct copy shares the Repos slice).
+func (c Config) Clone() Config {
+	c.Repos = append([]Repo(nil), c.Repos...)
+	return c
+}
+
+// Validate rejects settings pgBackRest would accept but that lose data: two local
+// repositories in the same or a nested directory share their files, and the shorter
+// retention then expires the other's backups.
+func (c Config) Validate() error {
+	for i, a := range c.Repos {
+		for j := i + 1; j < len(c.Repos); j++ {
+			b := c.Repos[j]
+			if a.Type != Posix || b.Type != Posix {
+				continue
+			}
+			pa, pb := filepath.Clean(a.Path)+"/", filepath.Clean(b.Path)+"/"
+			if strings.HasPrefix(pa, pb) || strings.HasPrefix(pb, pa) {
+				return fmt.Errorf("repo%d (%s) and repo%d (%s) must be separate directories", i+1, a.Path, j+1, b.Path)
+			}
+		}
+	}
+	return nil
 }
 
 // RepoRetention is the effective retention of repo i (0-based).

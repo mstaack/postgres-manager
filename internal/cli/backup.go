@@ -86,9 +86,16 @@ func (a *App) backupNow(ctx context.Context, typ string) error {
 	if err := a.requireConfigured(); err != nil {
 		return err
 	}
-	unlock, err := sys.Lock(backup.LockFile, 4*time.Hour)
-	if err != nil {
+	unlock, err := sys.Lock(ctx, backup.LockFile, 0)
+	if errors.Is(err, sys.ErrLocked) {
+		a.UI.Info("Another backup is running — waiting for it (Ctrl-C to cancel)")
+		unlock, err = sys.Lock(ctx, backup.LockFile, 4*time.Hour)
+	}
+	if errors.Is(err, sys.ErrLocked) {
 		return fmt.Errorf("another backup is still running: %w", err)
+	}
+	if err != nil {
+		return err
 	}
 	defer unlock()
 	a.UI.Info("Running %s backup (stanza %s → %s)", typ, a.Cfg.Stanza, a.repoLabels())
@@ -118,13 +125,15 @@ func (a *App) cronBackup(ctx context.Context, typ string) error {
 	if typ == "incr" {
 		wait = 0
 	}
-	unlock, err := sys.Lock(backup.LockFile, wait)
+	unlock, err := sys.Lock(ctx, backup.LockFile, wait)
 	if errors.Is(err, sys.ErrLocked) && typ == "incr" {
 		a.UI.Println("another backup is running, skipping incr")
 		return nil
 	}
 	if err != nil {
-		err = fmt.Errorf("timed out waiting for another backup: %w", err)
+		if errors.Is(err, sys.ErrLocked) {
+			err = fmt.Errorf("timed out waiting for another backup: %w", err)
+		}
 		a.heartbeat(ctx, "/fail", backup.FailureReport(typ, err, ""))
 		return err
 	}
@@ -165,12 +174,17 @@ func (a *App) list(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.printList(info)
+	return nil
+}
+
+func (a *App) printList(info backup.Info) {
 	u := a.UI
 	u.Header(fmt.Sprintf("Backups · stanza %s · %s", a.Cfg.Stanza, a.repoLabels()))
 	if info.Status.Code != 0 {
 		u.Warn("%s", info.Status.Message)
 		if len(info.Backup) == 0 {
-			return nil
+			return
 		}
 	}
 	multi := len(a.Cfg.Repos) > 1
@@ -188,7 +202,7 @@ func (a *App) list(ctx context.Context) error {
 		u.Printf("  %s\n", line)
 	}
 	if len(info.Backup) == 0 {
-		return nil
+		return
 	}
 	u.Println()
 	u.Row("PITR", "any point from "+format.TS(info.Backup[0].Timestamp.Stop)+" until the last archived WAL")
@@ -200,7 +214,6 @@ func (a *App) list(ctx context.Context) error {
 		u.Row(label, ar.Min+" … "+ar.Max)
 	}
 	u.Row("Repo", format.Bytes(info.RepoDelta())+" (backups, excl. WAL)")
-	return nil
 }
 
 // ---- setup ----
@@ -215,7 +228,8 @@ func (a *App) setup(ctx context.Context) error {
 	if !a.PG.Ready(ctx) {
 		return fmt.Errorf("PostgreSQL %s must be running", c.ID())
 	}
-	cfg := a.Cfg
+	cfg := a.Cfg.Clone()
+	old, wasConfigured := a.Cfg.Clone(), a.Configured
 	if !a.Configured {
 		if lc, ok, err := config.LoadLegacy(); err != nil {
 			u.Warn("Ignoring the old postgres-manager settings: %v", err)
@@ -279,8 +293,7 @@ func (a *App) setup(ctx context.Context) error {
 	}
 
 	u.Header("Schedule & retention")
-	a.Cfg = cfg
-	u.Row("Schedule", a.scheduleLine())
+	u.Row("Schedule", scheduleLine(cfg))
 	for i := range cfg.Repos {
 		u.Row(fmt.Sprintf("repo%d", i+1), repoLine(cfg, i))
 	}
@@ -301,15 +314,27 @@ func (a *App) setup(ctx context.Context) error {
 		return err
 	}
 	cfg.Cluster = c.ID()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
 	a.Cfg = cfg
 	if err := a.applyConfig(ctx); err != nil {
+		if wasConfigured {
+			return a.revertConfig(ctx, old, err)
+		}
 		return err
 	}
 	a.Configured = true
 	u.OK("Wrote %s and %s", config.Path, backup.PgbrConf)
 
 	u.Header("Repository")
-	if err := a.initRepos(ctx); err != nil {
+	if err := a.reposReachable(ctx); err != nil {
+		if wasConfigured {
+			return a.revertConfig(ctx, old, err)
+		}
+		return err
+	}
+	if err := a.createStanza(ctx); err != nil {
 		return err
 	}
 
@@ -347,7 +372,7 @@ func (a *App) setup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	u.OK("Schedule (%s): %s", how, a.scheduleLine())
+	u.OK("Schedule (%s): %s", how, scheduleLine(cfg))
 	done, err := backup.RemoveLegacy()
 	for _, d := range done {
 		u.OK("Old postgres-manager: %s", d)
@@ -370,8 +395,8 @@ func (a *App) setup(ctx context.Context) error {
 	return nil
 }
 
-// initRepos checks every repository is reachable and creates the stanza.
-func (a *App) initRepos(ctx context.Context) error {
+// reposReachable checks every repository of the written pgbackrest.conf is reachable.
+func (a *App) reposReachable(ctx context.Context) error {
 	for i := range a.Cfg.Repos {
 		a.UI.Info("Testing access to repo%d (%s)", i+1, a.Cfg.Repos[i].Label())
 		if err := backup.RepoReachable(ctx, a.R, i+1); err != nil {
@@ -379,11 +404,26 @@ func (a *App) initRepos(ctx context.Context) error {
 		}
 	}
 	a.UI.OK("Repository reachable")
+	return nil
+}
+
+func (a *App) createStanza(ctx context.Context) error {
 	if err := a.pgbr().Stream(ctx, "--log-level-console=warn", "stanza-create"); err != nil {
 		return err
 	}
 	a.UI.OK("Stanza %s ready", a.Cfg.Stanza)
 	return nil
+}
+
+// revertConfig writes the previous settings back after the new repository failed its
+// test (cause): WAL archiving must not be left pointing at an unreachable repository.
+func (a *App) revertConfig(ctx context.Context, old config.Config, cause error) error {
+	a.Cfg = old
+	if err := a.applyConfig(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("%w (restoring the previous settings failed too: %v)", cause, err)
+	}
+	a.UI.Warn("Nothing changed — the previous settings are back in place.")
+	return cause
 }
 
 // applyConfig saves the config and renders pgbackrest.conf.
@@ -414,7 +454,7 @@ func (a *App) applyConfig(ctx context.Context) error {
 
 func (a *App) writeArchiveSnippet(ctx context.Context) (bool, error) {
 	snippet, restart := backup.RenderArchiveSnippet(a.Cfg, a.PG.Setting(ctx, "wal_level"), a.PG.Setting(ctx, "archive_mode"))
-	return restart, a.writeSnippet(ctx, pg.SnippetArchive, snippet)
+	return restart, a.writeSnippet(ctx, pg.SnippetArchive, snippet, false)
 }
 
 // installSelf copies the running binary to /usr/local/sbin/pgm (the timers call it there).
@@ -780,8 +820,11 @@ func (a *App) editRetention(cfg *config.Config) error {
 		presets = localRetention
 	}
 	v, err := a.pickRetention("Retention of repo1 ("+cfg.Repos[0].Label()+")", presets, cfg.RepoRetention(0))
+	if err != nil {
+		return err
+	}
 	cfg.Retention, cfg.Repos[0].Retention = v, 0 // repo1 follows the global retention
-	return err
+	return nil
 }
 
 // mounts lists the writable storage filesystems with their free space.
@@ -877,19 +920,17 @@ func (a *App) edit(ctx context.Context) error {
 		return err
 	}
 	u := a.UI
-	cfg := a.Cfg
-	old := a.Cfg
+	// cfg is a private copy: a cancelled or failed prompt leaves a.Cfg untouched.
+	cfg := a.Cfg.Clone()
 	repoChanged := false
-	var removedLocal string
 	for {
-		a.Cfg = cfg
 		second := "off"
 		if len(cfg.Repos) > 1 {
-			second = fmt.Sprintf("%s, %d days", cfg.Repos[1].Label(), cfg.RepoRetention(1))
+			second = repoLine(cfg, 1)
 		}
 		u.Header("Backup settings")
 		pick, err := u.Choose("Change", []string{
-			"Schedule            " + a.scheduleLine(),
+			"Schedule            " + scheduleLine(cfg),
 			fmt.Sprintf("Retention (repo1)   %d days", cfg.RepoRetention(0)),
 			fmt.Sprintf("RPO                 archive_timeout %ds", cfg.ArchiveTimeout),
 			fmt.Sprintf("Performance         %d processes, zstd %d", cfg.ProcessMax, cfg.CompressLevel),
@@ -900,56 +941,66 @@ func (a *App) edit(ctx context.Context) error {
 			"Show encryption passphrase",
 			"Save & apply"}, 9)
 		if err != nil {
-			a.Cfg = old
 			return err
 		}
+		// Each editor works on its own copy, so a prompt cancelled halfway changes nothing.
+		next := cfg.Clone()
 		switch pick {
 		case 0:
-			err = a.editSchedule(&cfg)
+			err = a.editSchedule(&next)
 		case 1:
-			err = a.editRetention(&cfg)
+			err = a.editRetention(&next)
 		case 2:
-			err = a.editRPO(&cfg)
+			err = a.editRPO(&next)
 		case 3:
-			err = a.editPerformance(&cfg)
+			err = a.editPerformance(&next)
 		case 4:
-			err = a.editQueue(&cfg)
+			err = a.editQueue(&next)
 		case 5:
-			err = a.editHeartbeat(&cfg)
+			err = a.editHeartbeat(&next)
 		case 6:
 			u.Warn("A new repository starts empty: a new full backup is taken after saving.")
-			err = a.promptRepo(&cfg.Repos[0])
-			repoChanged = true
+			err = a.promptRepo(&next.Repos[0])
 		case 7:
-			before := len(cfg.Repos) > 1
-			path := ""
-			if before {
-				path = cfg.Repos[1].Path
-			}
-			err = a.promptSecondRepo(&cfg)
-			if len(cfg.Repos) > 1 && (!before || cfg.Repos[1].Path != path) {
-				repoChanged = true
-			}
-			if before && len(cfg.Repos) == 1 {
-				removedLocal = path
-			}
+			err = a.promptSecondRepo(&next)
 		case 8:
 			u.Printf("\n    %s\n", u.Bold(cfg.Cipher.Reveal()))
 		case 9:
-			a.Cfg = cfg
-			return a.saveEdit(ctx, old, repoChanged, removedLocal)
+			return a.saveEdit(ctx, cfg, repoChanged)
 		}
 		if err != nil {
-			a.Cfg = old
 			return err
 		}
+		if err := next.Validate(); err != nil {
+			u.Warn("Not changed: %v", err)
+			continue
+		}
+		switch pick {
+		case 6:
+			repoChanged = true
+		case 7:
+			// A new or moved local copy starts empty and needs a stanza and a full backup.
+			if len(next.Repos) > 1 && (len(cfg.Repos) < 2 || cfg.Repos[1].Path != next.Repos[1].Path) {
+				repoChanged = true
+			}
+		}
+		cfg = next
 	}
 }
 
-func (a *App) saveEdit(ctx context.Context, old config.Config, repoChanged bool, removedLocal string) error {
+// saveEdit applies the edited settings. With a changed repository the new settings are
+// tested first and the previous ones restored when the repository cannot be reached.
+func (a *App) saveEdit(ctx context.Context, cfg config.Config, repoChanged bool) error {
 	u := a.UI
+	old := a.Cfg
+	a.Cfg = cfg
 	if err := a.applyConfig(ctx); err != nil {
-		return err
+		return a.revertConfig(ctx, old, err)
+	}
+	if repoChanged {
+		if err := a.reposReachable(ctx); err != nil {
+			return a.revertConfig(ctx, old, err)
+		}
 	}
 	if a.Cfg.ArchiveTimeout != old.ArchiveTimeout || a.Cfg.Stanza != old.Stanza {
 		if _, err := a.writeArchiveSnippet(ctx); err != nil {
@@ -962,20 +1013,20 @@ func (a *App) saveEdit(ctx context.Context, old config.Config, repoChanged bool,
 		}
 	}
 	u.OK("Saved and applied")
-	if removedLocal != "" {
-		del, err := u.Confirm(fmt.Sprintf("Delete the local copy's files in %s?", removedLocal), false)
+	if dir := removedLocalDir(old, a.Cfg); dir != "" {
+		del, err := u.Confirm(fmt.Sprintf("Delete the local copy's files in %s?", dir), false)
 		if err != nil {
 			return err
 		}
-		if del && removedLocal != "/" {
-			if err := os.RemoveAll(removedLocal); err != nil {
+		if del {
+			if err := os.RemoveAll(dir); err != nil {
 				return err
 			}
-			u.OK("Deleted %s", removedLocal)
+			u.OK("Deleted %s", dir)
 		}
 	}
 	if repoChanged {
-		if err := a.initRepos(ctx); err != nil {
+		if err := a.createStanza(ctx); err != nil {
 			return err
 		}
 		if err := a.pgbr().Stream(ctx, "--log-level-console=warn", "check"); err != nil {
@@ -984,4 +1035,22 @@ func (a *App) saveEdit(ctx context.Context, old config.Config, repoChanged bool,
 		return a.backupNow(ctx, "full")
 	}
 	return nil
+}
+
+// removedLocalDir is the directory of the local copy (repo2) that the edit dropped, or ""
+// when there was none or a repository still uses that directory.
+func removedLocalDir(old, cur config.Config) string {
+	if len(old.Repos) < 2 || old.Repos[1].Type != config.Posix {
+		return ""
+	}
+	dir := filepath.Clean(old.Repos[1].Path)
+	if dir == "/" {
+		return ""
+	}
+	for _, r := range cur.Repos { // never offer a directory a repository still lives in or under
+		if r.Type == config.Posix && strings.HasPrefix(filepath.Clean(r.Path)+"/", dir+"/") {
+			return ""
+		}
+	}
+	return dir
 }

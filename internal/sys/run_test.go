@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExecRunnerCapturesStdout(t *testing.T) {
@@ -55,5 +56,25 @@ func TestExitErrorMessage(t *testing.T) {
 func TestHave(t *testing.T) {
 	if !Have("sh") || Have("definitely-not-a-binary-xyz") {
 		t.Fatal("Have wrong")
+	}
+}
+
+func TestExecRunnerCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	start := time.Now()
+	_, err := ExecRunner{}.Run(ctx, Cmd{Name: "sleep", Args: []string{"30"}})
+	if !errors.Is(err, context.Canceled) || time.Since(start) > 5*time.Second {
+		t.Fatalf("err=%v after %s", err, time.Since(start))
+	}
+}
+
+func TestTailWriter(t *testing.T) {
+	w := &tailWriter{max: 4}
+	for _, s := range []string{"abc", "defgh", "ij"} {
+		_, _ = w.Write([]byte(s))
+	}
+	if w.String() != "ghij" {
+		t.Fatalf("%q", w.String())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -143,14 +144,15 @@ func (a *App) askDatabases(ctx context.Context, prompt, def string) (string, err
 		if err != nil {
 			return "", err
 		}
+		given := splitList(s)
 		var unknown []string
-		for _, db := range splitList(s) {
-			if db != "all" && !a.PG.DatabaseExists(ctx, db) {
+		for _, db := range given {
+			if db != "all" && db != "postgres" && !slices.Contains(dbs, db) {
 				unknown = append(unknown, db)
 			}
 		}
 		switch {
-		case len(splitList(s)) == 0:
+		case len(given) == 0:
 			a.UI.Warn("Enter at least one database")
 		case len(unknown) > 0:
 			a.UI.Warn("Unknown database: %s", strings.Join(unknown, " "))
@@ -163,8 +165,9 @@ func (a *App) askDatabases(ctx context.Context, prompt, def string) (string, err
 // appDatabases are the app databases that exist in this cluster.
 func (a *App) appDatabases(ctx context.Context) []string {
 	var out []string
+	all, _ := a.PG.Databases(ctx)
 	for _, db := range apps.Databases(a.Apps()) {
-		if a.PG.DatabaseExists(ctx, db) {
+		if slices.Contains(all, db) {
 			out = append(out, db)
 		}
 	}
@@ -222,6 +225,16 @@ func (a *App) userCreate(ctx context.Context, name, readOnly string, fromStdin b
 		return err
 	}
 	a.UI.OK("Created user %s", name)
+	if err := a.userCreateAccess(ctx, name, newDB, dbs); err != nil {
+		a.roleKept(ctx, name, password, show)
+		return err
+	}
+	a.showCredentials(ctx, name, password, access.RoleDatabase(ctx, a.PG, name), show)
+	return nil
+}
+
+// userCreateAccess gives a new user its read access and database.
+func (a *App) userCreateAccess(ctx context.Context, name, newDB string, dbs []string) error {
 	if len(dbs) > 0 {
 		if err := access.MakeReadOnly(ctx, a.PG, name); err != nil {
 			return err
@@ -242,8 +255,17 @@ func (a *App) userCreate(ctx context.Context, name, readOnly string, fromStdin b
 		}
 		a.UI.OK("Created database %s (owner %s)", newDB, name)
 	}
-	a.showCredentials(ctx, name, password, access.RoleDatabase(ctx, a.PG, name), show)
 	return nil
+}
+
+// roleKept reports a user this command created before a later step failed. A generated
+// password is shown now: it would be lost otherwise, and a rerun finds the user existing.
+func (a *App) roleKept(ctx context.Context, name, password string, show bool) {
+	ctx = context.WithoutCancel(ctx)
+	a.UI.Warn("User %s was created before this failed and is kept.", name)
+	if show {
+		a.showCredentials(ctx, name, password, access.RoleDatabase(ctx, a.PG, name), true)
+	}
 }
 
 func (a *App) grantOne(ctx context.Context, role, db string) error {
@@ -275,6 +297,9 @@ func (a *App) userPassword(ctx context.Context, name string, fromStdin, yes bool
 	}
 	if s := apps.Using(a.Apps(), name, true); s != "" {
 		a.UI.Warn("%s is used by app: %s — update DB_PASSWORD in its .env (and re-cache the config) right after.", name, s)
+		if !yes && fromStdin {
+			return errors.New("--password-stdin needs --yes here (stdin carries the password, so there is no prompt)")
+		}
 		if !yes {
 			ok, err := a.UI.Confirm("Change the password anyway?", false)
 			if err != nil {

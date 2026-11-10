@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/mstaack/postgres-manager/internal/backup"
 	"github.com/mstaack/postgres-manager/internal/format"
 	"github.com/mstaack/postgres-manager/internal/sys"
 )
@@ -62,7 +63,7 @@ func httpGet(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "pgm-self-update")
+	req.Header.Set("User-Agent", backup.UserAgent)
 	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
 	if err != nil {
 		return nil, err
@@ -168,6 +169,10 @@ func (a *App) replaceBinary(ctx context.Context, dest string, bin []byte) (strin
 		return "", err
 	}
 	if err := tmp.Chmod(0o755); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil { // the rename must not outlive the data on a power loss
 		_ = tmp.Close()
 		return "", err
 	}

@@ -56,29 +56,43 @@ func (t Target) Describe() string {
 	return s
 }
 
-// RestoreInto restores into an empty directory with archiving off.
+// TablespaceDir is where a copy restored into dir keeps its tablespaces.
+func TablespaceDir(dir string) string { return filepath.Clean(dir) + "-tablespaces" }
+
+// RestoreInto restores into an empty directory with archiving off. Tablespaces are
+// remapped next to it (TablespaceDir): by default pgBackRest restores them to their
+// original paths, which are the live cluster's.
 func (b Pgbr) RestoreInto(ctx context.Context, dir string, t Target) error {
-	if ents, err := os.ReadDir(dir); err == nil && len(ents) > 0 {
-		return fmt.Errorf("%s is not empty", dir)
+	ts := TablespaceDir(dir)
+	for _, d := range []string{dir, ts} {
+		if ents, err := os.ReadDir(d); err == nil && len(ents) > 0 {
+			return fmt.Errorf("%s is not empty", d)
+		}
 	}
 	uid, gid := sys.PostgresIDs()
-	if err := sys.MkdirOwned(dir, 0o700, uid, gid); err != nil {
-		return err
+	for _, d := range []string{dir, ts} {
+		if err := sys.MkdirOwned(d, 0o700, uid, gid); err != nil {
+			return err
+		}
 	}
-	args := append([]string{"--pg1-path=" + dir, "--archive-mode=off", "--log-level-console=info"}, t.Args()...)
-	return b.Stream(ctx, append(args, "restore")...)
+	args := append([]string{"--pg1-path=" + dir, "--tablespace-map-all=" + ts, "--archive-mode=off", "--log-level-console=info"}, t.Args()...)
+	err := b.Stream(ctx, append(args, "restore")...)
+	_ = os.Remove(ts) // only removes it when the backup has no tablespaces
+	return err
 }
 
 // CopySettings reads the values a restored copy needs from the live cluster.
 func CopySettings(ctx context.Context, p pg.PG) Settings {
+	s := p.Settings(ctx, "max_connections", "max_worker_processes", "max_locks_per_transaction",
+		"max_prepared_transactions", "max_wal_senders", "shared_preload_libraries", "cron.database_name")
 	return Settings{
-		MaxConnections:          p.Setting(ctx, "max_connections"),
-		MaxWorkerProcesses:      p.Setting(ctx, "max_worker_processes"),
-		MaxLocksPerTransaction:  p.Setting(ctx, "max_locks_per_transaction"),
-		MaxPreparedTransactions: p.Setting(ctx, "max_prepared_transactions"),
-		MaxWalSenders:           p.Setting(ctx, "max_wal_senders"),
-		SharedPreloadLibraries:  p.Setting(ctx, "shared_preload_libraries"),
-		CronDatabase:            p.Setting(ctx, "cron.database_name"),
+		MaxConnections:          s["max_connections"],
+		MaxWorkerProcesses:      s["max_worker_processes"],
+		MaxLocksPerTransaction:  s["max_locks_per_transaction"],
+		MaxPreparedTransactions: s["max_prepared_transactions"],
+		MaxWalSenders:           s["max_wal_senders"],
+		SharedPreloadLibraries:  s["shared_preload_libraries"],
+		CronDatabase:            s["cron.database_name"],
 	}
 }
 

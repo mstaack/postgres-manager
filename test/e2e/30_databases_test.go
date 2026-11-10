@@ -69,7 +69,7 @@ func TestDatabases(t *testing.T) {
 		eq(t, "0", dbCount("shop"), "shop is gone")
 		eq(t, "1", roleCount("shop"), "declined owner drop keeps shop")
 
-		ok(t, pmIn("blog\ny\n", "db", "drop", "blog"), "db drop blog and its owner")
+		ok(t, pmIn("blog\nblog\n", "db", "drop", "blog"), "db drop blog and its owner")
 		eq(t, "0", roleCount("blog"), "owner blog dropped too")
 	})
 }

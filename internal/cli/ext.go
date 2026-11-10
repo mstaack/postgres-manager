@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -53,15 +54,17 @@ func catalogKeys() string {
 	return strings.Join(k, ", ")
 }
 
-func (a *App) extDatabases(ctx context.Context, e ext.Extension) string {
-	var out []string
+// extDatabases maps each created extension to the databases it is in (one query per database).
+func (a *App) extDatabases(ctx context.Context) map[string][]string {
+	out := map[string][]string{}
 	dbs, _ := a.PG.Databases(ctx)
 	for _, db := range dbs {
-		if v, _ := a.PG.Value(ctx, db, "select 1 from pg_extension where extname = "+pg.Lit(e.SQLName)); v != "" {
-			out = append(out, db)
+		names, _ := a.PG.Column(ctx, db, "select extname from pg_extension")
+		for _, n := range names {
+			out[n] = append(out[n], db)
 		}
 	}
-	return strings.Join(out, ", ")
+	return out
 }
 
 func (a *App) extensions(ctx context.Context) error {
@@ -71,6 +74,7 @@ func (a *App) extensions(ctx context.Context) error {
 	u := a.UI
 	preload := a.PG.Setting(ctx, "shared_preload_libraries")
 	u.Header("Extensions · PostgreSQL " + a.PG.C.ID())
+	in := a.extDatabases(ctx)
 	for i, e := range ext.Catalog {
 		state := u.Dim("not installed")
 		if e.Installed(a.PG.C.ShareDir()) {
@@ -83,8 +87,8 @@ func (a *App) extensions(ctx context.Context) error {
 				state += " · " + u.Dim("not preloaded")
 			}
 		}
-		if dbs := a.extDatabases(ctx, e); dbs != "" {
-			state += " · in " + dbs
+		if dbs := in[e.SQLName]; len(dbs) > 0 {
+			state += " · in " + strings.Join(dbs, ", ")
 		}
 		u.Printf("  %s %-52s %s\n", u.Bold(strconv.Itoa(i+1)+")"), e.Label, state)
 	}
@@ -124,9 +128,18 @@ func (a *App) enableExtensions(ctx context.Context, chosen []ext.Extension, dbs 
 		}
 		hasCron = hasCron || e.OneDB
 	}
-	newPreload, restart := ext.AddPreload(preload, libs...)
+	// Start from the snippet too: it holds what an earlier run enabled whose restart is
+	// still pending, which the running server does not report.
+	snippet := a.PG.ReadSnippet(pg.SnippetExtensions)
+	newPreload, _ := ext.AddPreload(preload, splitList(ext.SnippetValue(snippet, "shared_preload_libraries"))...)
+	newPreload, _ = ext.AddPreload(newPreload, libs...)
+	restart := newPreload != preload
 	appDBs := a.appDatabases(ctx)
+	all, _ := a.PG.Databases(ctx)
 	cronDB := a.PG.Setting(ctx, "cron.database_name")
+	if cronDB == "" {
+		cronDB = ext.SnippetValue(snippet, "cron.database_name")
+	}
 	if hasCron {
 		def := cronDB
 		if def == "" && len(appDBs) > 0 {
@@ -142,13 +155,16 @@ func (a *App) enableExtensions(ctx context.Context, chosen []ext.Extension, dbs 
 				return err
 			}
 		}
+		if !slices.Contains(all, v) { // a wrong name ends up in the conf and pg_cron runs nothing
+			return fmt.Errorf("Database %s does not exist", v) //nolint:staticcheck // user-facing
+		}
 		if v != cronDB {
 			restart = true
 		}
 		cronDB = v
 	}
 	if restart {
-		if err := a.writeSnippet(ctx, pg.SnippetExtensions, ext.RenderSnippet(newPreload, cronDB)); err != nil {
+		if err := a.writeSnippet(ctx, pg.SnippetExtensions, ext.RenderSnippet(newPreload, cronDB), yes); err != nil {
 			return err
 		}
 		u.Warn("shared_preload_libraries changed (%s) — needs a PostgreSQL restart.", newPreload)
@@ -169,7 +185,6 @@ func (a *App) enableExtensions(ctx context.Context, chosen []ext.Extension, dbs 
 	}
 
 	u.Header("Enable in databases")
-	all, _ := a.PG.Databases(ctx)
 	var targets string
 	if dbs != nil {
 		targets = *dbs
@@ -200,6 +215,7 @@ func (a *App) enableExtensions(ctx context.Context, chosen []ext.Extension, dbs 
 		list = splitList(targets)
 	}
 	preload = a.PG.Setting(ctx, "shared_preload_libraries")
+	failed := 0
 	for _, e := range chosen {
 		if e.Preload && !ext.PreloadHas(preload, e.Key) {
 			u.Warn("%s is not preloaded yet (restart pending) — skipped", e.Key)
@@ -209,15 +225,23 @@ func (a *App) enableExtensions(ctx context.Context, chosen []ext.Extension, dbs 
 		if e.OneDB {
 			targets = []string{a.PG.Setting(ctx, "cron.database_name")}
 		}
+		if len(targets) == 0 {
+			u.Info("%s: no database chosen — installed, not enabled anywhere", e.SQLName)
+		}
 		for _, db := range targets {
-			if !a.PG.DatabaseExists(ctx, db) {
+			if !slices.Contains(all, db) {
 				u.Warn("Database %s does not exist — skipped", db)
+				failed++
 			} else if err := a.PG.Exec(ctx, db, "create extension if not exists "+pg.Ident(e.SQLName)); err != nil {
 				u.Warn("Could not create %s in %s: %v", e.SQLName, db, err)
+				failed++
 			} else {
 				u.OK("%s enabled in %s", e.SQLName, db)
 			}
 		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d extension(s) could not be enabled (see above)", failed)
 	}
 	return nil
 }

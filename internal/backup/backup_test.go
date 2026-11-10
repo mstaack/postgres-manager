@@ -1,11 +1,14 @@
 package backup
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/mstaack/postgres-manager/internal/config"
 	"github.com/mstaack/postgres-manager/internal/pg"
+	"github.com/mstaack/postgres-manager/internal/sys"
 )
 
 func TestCronToOnCalendar(t *testing.T) {
@@ -152,10 +155,10 @@ func TestParseInfo(t *testing.T) {
 		t.Fatalf("empty info must not look ok: %+v %v", empty, err)
 	}
 	r1, r2 := i.ForRepo(1), i.ForRepo(2)
-	if len(r1.Backup) != 2 || r1.RepoDelta() != 105 || len(r1.Arch) != 1 || r1.Status.Code != 0 || !r1.Status.Lock.Backup.Held {
+	if len(r1.Backup) != 2 || r1.RepoDelta() != 105 || r1.Status.Code != 0 || !r1.Status.Lock.Backup.Held {
 		t.Fatalf("repo1: %+v", r1)
 	}
-	if len(r2.Backup) != 1 || len(r2.Arch) != 0 || r2.Status.Message != "no valid backups" {
+	if len(r2.Backup) != 1 || r2.Status.Message != "no valid backups" {
 		t.Fatalf("repo2: %+v", r2)
 	}
 }
@@ -183,5 +186,21 @@ func TestRecoveredUntil(t *testing.T) {
 	}
 	if RecoveredUntil("") != "unknown" {
 		t.Fatal("empty log")
+	}
+}
+
+func TestBackupContinuesAfterAFailingRepo(t *testing.T) {
+	f := &sys.FakeRunner{Fallback: func(c sys.Cmd) (string, error) {
+		if strings.Contains(strings.Join(c.Args, " "), "--repo=1") {
+			return "", errors.New("R2 down")
+		}
+		return "", nil
+	}}
+	err := Pgbr{R: f, Stanza: "main"}.Backup(context.Background(), "diff", 2)
+	if err == nil || !strings.Contains(err.Error(), "repo1: R2 down") || len(f.Calls) != 2 {
+		t.Fatalf("err=%v calls=%d", err, len(f.Calls))
+	}
+	if !strings.Contains(strings.Join(f.Calls[1].Args, " "), "--repo=2") {
+		t.Fatalf("repo2 was not backed up: %v", f.Calls[1].Args)
 	}
 }

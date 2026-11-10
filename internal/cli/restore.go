@@ -69,6 +69,14 @@ func (a *App) verifyCmd() *cobra.Command {
 }
 
 // workDir is a directory next to the cluster's version directory, e.g. /var/lib/postgresql/<name>.
+// removeCopy deletes a restored copy and its tablespaces.
+func removeCopy(dir string) error {
+	if err := os.RemoveAll(backup.TablespaceDir(dir)); err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
 func (a *App) workDir(name string) string {
 	return filepath.Join(filepath.Dir(filepath.Dir(a.PG.C.DataDir)), name)
 }
@@ -105,9 +113,7 @@ func (a *App) restore(ctx context.Context, o restoreOpts) error {
 		return errors.New("no backups yet — run: pgm backup full")
 	}
 	if !o.given() {
-		if err := a.list(ctx); err != nil {
-			return err
-		}
+		a.printList(info)
 		if err := a.askRestore(ctx, info, &o); err != nil {
 			return err
 		}
@@ -248,6 +254,9 @@ func (a *App) restoreToDir(ctx context.Context, info backup.Info, t backup.Targe
 		return err
 	}
 	u.OK("Restored into %s (archiving disabled, config written for a standalone start)", dir)
+	if _, err := os.Stat(backup.TablespaceDir(dir)); err == nil {
+		u.Info("Its tablespaces are in %s", backup.TablespaceDir(dir))
+	}
 	start := o.Yes
 	if !o.Yes {
 		var err error
@@ -278,7 +287,7 @@ func (a *App) restoreLive(ctx context.Context, t backup.Target, o restoreOpts) e
 			return err
 		}
 	}
-	unlock, err := sys.Lock(backup.LockFile, 0)
+	unlock, err := sys.Lock(ctx, backup.LockFile, 0)
 	if err != nil {
 		return errors.New("a backup is running — wait for it to finish")
 	}
@@ -365,7 +374,7 @@ func (a *App) restoreDB(ctx context.Context, info backup.Info, t backup.Target, 
 	cl := a.PG.C
 	defer func() {
 		backup.StopStandalone(context.WithoutCancel(ctx), a.R, cl, dir)
-		_ = os.RemoveAll(dir)
+		_ = removeCopy(dir)
 		_ = os.Remove(dump)
 	}()
 	uid, gid := sys.PostgresIDs()
@@ -403,8 +412,9 @@ func (a *App) restoreDB(ctx context.Context, info backup.Info, t backup.Target, 
 		Args: append(append([]string{"-h", dir, "-p", strconv.Itoa(backup.DBRestorePort)}, cl.DumpFormat()...), "-f", dump, o.DB)}); err != nil {
 		return err
 	}
+	old := ""
 	if o.Replace {
-		old := o.DB + "_old_" + stamp
+		old = o.DB + "_old_" + stamp
 		if err := a.PG.Exec(ctx, "postgres", "select pg_terminate_backend(pid) from pg_stat_activity where datname = "+pg.Lit(o.DB)+" and pid <> pg_backend_pid()"); err != nil {
 			return err
 		}
@@ -418,9 +428,8 @@ func (a *App) restoreDB(ctx context.Context, info backup.Info, t backup.Target, 
 		return err
 	}
 	u.Info("Loading into %s", target)
-	if _, err := a.R.Run(ctx, sys.Cmd{Name: cl.Bin("pg_restore"), AsPostgres: true,
-		Args: []string{"-p", strconv.Itoa(cl.Port), "-d", target, dump}}); err != nil {
-		u.Warn("pg_restore reported errors (often missing roles or extensions): %v", err)
+	if err := a.pgRestore(ctx, target, old, "often missing roles or extensions", "-p", strconv.Itoa(cl.Port), "-d", target, dump); err != nil {
+		return err
 	}
 	u.OK("Restored %s as %s", o.DB, target)
 	u.Info("Database-level grants (read-only users' CONNECT) are not copied — re-run: pgm user grant <user> %s", target)
@@ -442,7 +451,7 @@ func (a *App) verify(ctx context.Context, keep bool) error {
 	}
 	if _, err := os.Stat(dir); err == nil {
 		backup.StopStandalone(ctx, a.R, c, dir)
-		if err := os.RemoveAll(dir); err != nil {
+		if err := removeCopy(dir); err != nil {
 			return err
 		}
 	}
@@ -501,11 +510,11 @@ func (a *App) verify(ctx context.Context, keep bool) error {
 	u.Row("Recovered", backup.RecoveredUntil(string(log)))
 	if keep {
 		u.OK("Kept running: sudo -u postgres psql -h %s -p %d -d <db>", dir, backup.VerifyPort)
-		u.Info("Stop + remove: sudo -u postgres %s -D %s stop && sudo rm -rf %s", c.Bin("pg_ctl"), dir, dir)
+		u.Info("Stop + remove: sudo -u postgres %s -D %s stop && sudo rm -rf %s %s", c.Bin("pg_ctl"), dir, dir, backup.TablespaceDir(dir))
 		return nil
 	}
 	backup.StopStandalone(ctx, a.R, c, dir)
-	if err := os.RemoveAll(dir); err != nil {
+	if err := removeCopy(dir); err != nil {
 		return err
 	}
 	if missing > 0 {

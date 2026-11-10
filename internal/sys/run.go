@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // Cmd describes one process. Secrets go into Stdin, never into Args.
@@ -70,12 +72,19 @@ func command(ctx context.Context, c Cmd) *exec.Cmd {
 	cmd.Dir = "/"
 	cmd.Env = append(append(os.Environ(), "LC_ALL=C.UTF-8"), c.Env...)
 	cmd.Stdin = c.Stdin
+	// On cancellation send SIGTERM, which runuser forwards to its child (it cannot forward
+	// the default SIGKILL, which would orphan pgbackrest/pg_restore); kill after WaitDelay.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
 	return cmd
 }
 
-func wrap(c Cmd, err error, stderr string) error {
+func wrap(ctx context.Context, c Cmd, err error, stderr string) error {
 	if err == nil {
 		return nil
+	}
+	if ctx.Err() != nil { // cancelled: not the command's own failure
+		return fmt.Errorf("%s: %w", c.Name, ctx.Err())
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
@@ -87,10 +96,11 @@ func wrap(c Cmd, err error, stderr string) error {
 // Run implements Runner.
 func (ExecRunner) Run(ctx context.Context, c Cmd) (string, error) {
 	cmd := command(ctx, c)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
+	var out bytes.Buffer
+	errb := &tailWriter{max: 64 << 10}
+	cmd.Stdout, cmd.Stderr = &out, errb
 	err := cmd.Run()
-	return out.String(), wrap(c, err, errb.String())
+	return out.String(), wrap(ctx, c, err, errb.String())
 }
 
 // Stream implements Runner.
@@ -103,7 +113,29 @@ func (ExecRunner) Stream(ctx context.Context, c Cmd) error {
 	if c.Stderr != nil {
 		cmd.Stderr = c.Stderr
 	}
-	return wrap(c, cmd.Run(), "")
+	return wrap(ctx, c, cmd.Run(), "")
+}
+
+// tailWriter keeps the last max bytes written: ExitError shows only the end of stderr,
+// and pg_restore can print one error per object.
+type tailWriter struct {
+	max int
+	b   []byte
+}
+
+func (t *tailWriter) Write(p []byte) (int, error) {
+	t.b = append(t.b, p...)
+	if len(t.b) > 2*t.max {
+		t.b = append(t.b[:0], t.b[len(t.b)-t.max:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailWriter) String() string {
+	if len(t.b) > t.max {
+		return string(t.b[len(t.b)-t.max:])
+	}
+	return string(t.b)
 }
 
 // Have reports whether a binary is on PATH.

@@ -10,6 +10,7 @@ package access
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -111,6 +112,17 @@ func CreateDatabase(ctx context.Context, p pg.PG, name, owner string) (string, e
 		opts = " template template0 encoding 'UTF8' lc_collate 'C.UTF-8' lc_ctype 'C.UTF-8'"
 	}
 	return switched, p.Exec(ctx, "postgres", "create database "+pg.Ident(name)+" owner "+pg.Ident(owner)+opts)
+}
+
+// DropDatabase drops db and ends its sessions (WITH (FORCE) exists from PostgreSQL 13).
+func DropDatabase(ctx context.Context, p pg.PG, db string) error {
+	if p.C.Major() >= 13 {
+		return p.Exec(ctx, "postgres", "drop database "+pg.Ident(db)+" with (force)")
+	}
+	if err := p.Exec(ctx, "postgres", "select pg_terminate_backend(pid) from pg_stat_activity where datname = "+pg.Lit(db)+" and pid <> pg_backend_pid()"); err != nil {
+		return err
+	}
+	return p.Exec(ctx, "postgres", "drop database "+pg.Ident(db))
 }
 
 // MakeReadOnly sets default_transaction_read_only = on.
@@ -215,8 +227,15 @@ func RoleDatabase(ctx context.Context, p pg.PG, role string) string {
 func ParseDatabases(ctx context.Context, p pg.PG, list string) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
+	all, err := p.Databases(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for _, db := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' }) {
-		if db != "all" && !p.DatabaseExists(ctx, db) {
+		if db == "all" && p.C.Major() < 14 {
+			return nil, fmt.Errorf("'all' needs PostgreSQL 14+ (pg_read_all_data) — list the databases instead")
+		}
+		if db != "all" && !slices.Contains(all, db) {
 			return nil, fmt.Errorf("Database %s does not exist", db) //nolint:staticcheck // user-facing
 		}
 		if !seen[db] {

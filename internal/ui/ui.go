@@ -136,15 +136,6 @@ func Pad(s string, width int) string {
 	return s + strings.Repeat(" ", width-n)
 }
 
-// PadLeft right-aligns s in width runes.
-func PadLeft(s string, width int) string {
-	n := len([]rune(stripANSI(s)))
-	if n >= width {
-		return s
-	}
-	return strings.Repeat(" ", width-n) + s
-}
-
 func stripANSI(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {

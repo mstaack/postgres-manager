@@ -22,6 +22,10 @@ func Bytes(n int64) string {
 		v /= 1024
 		i++
 	}
+	if v >= 1023.95 && i < len(units)-1 { // would print "1024KiB"
+		v /= 1024
+		i++
+	}
 	s := strconv.FormatFloat(v, 'f', 1, 64)
 	return strings.TrimSuffix(s, ".0") + units[i]
 }

@@ -231,7 +231,7 @@ func (a *App) tune(ctx context.Context, o tuneOpts) error {
 			return err
 		}
 	}
-	if err := a.writeSnippet(ctx, SnippetTuning, tune.Render(in, rec)); err != nil {
+	if err := a.writeSnippet(ctx, SnippetTuning, tune.Render(in, rec), o.Yes); err != nil {
 		return err
 	}
 	u.OK("Wrote %s/conf.d/%s and reloaded", c.EtcDir(), SnippetTuning)

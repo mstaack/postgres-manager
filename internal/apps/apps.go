@@ -1,5 +1,5 @@
 // Package apps discovers PostgreSQL apps (Laravel Forge style) from .env files.
-// It reads only non-secret keys; DB_PASSWORD is never read into memory.
+// It keeps only non-secret keys: DB_PASSWORD is never parsed, stored or returned.
 package apps
 
 import (

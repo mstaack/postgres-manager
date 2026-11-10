@@ -95,6 +95,22 @@ func (p PG) Setting(ctx context.Context, name string) string {
 	return v
 }
 
+// Settings returns several server settings with one query (missing names are absent).
+func (p PG) Settings(ctx context.Context, names ...string) map[string]string {
+	lits := make([]string, len(names))
+	for i, n := range names {
+		lits[i] = Lit(n)
+	}
+	out := map[string]string{}
+	rows, _ := p.Query(ctx, "postgres", "select name, setting from pg_settings where name in ("+strings.Join(lits, ", ")+")")
+	for _, r := range rows {
+		if len(r) == 2 {
+			out[r[0]] = r[1]
+		}
+	}
+	return out
+}
+
 // Ready reports whether the cluster accepts connections.
 func (p PG) Ready(ctx context.Context) bool {
 	_, err := p.R.Run(ctx, sys.Cmd{Name: p.C.Bin("pg_isready"), Args: []string{"-q", "-p", fmt.Sprint(p.C.Port)}, AsPostgres: true})
@@ -162,9 +178,9 @@ func (p PG) UserDatabases(ctx context.Context) ([]string, error) {
 	return p.Column(ctx, "postgres", "select datname from pg_database where datallowconn and not datistemplate and datname <> 'postgres' order by 1")
 }
 
-// DatabaseExists reports whether a connectable database exists.
+// DatabaseExists reports whether a non-template database exists.
 func (p PG) DatabaseExists(ctx context.Context, name string) bool {
-	v, _ := p.Value(ctx, "postgres", "select 1 from pg_database where datname = "+Lit(name))
+	v, _ := p.Value(ctx, "postgres", "select 1 from pg_database where not datistemplate and datname = "+Lit(name))
 	return v == "1"
 }
 
@@ -177,8 +193,15 @@ func (p PG) RoleExists(ctx context.Context, name string) bool {
 // Ident quotes an identifier.
 func Ident(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
-// Lit quotes a string literal (standard_conforming_strings).
-func Lit(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+// Lit quotes a string literal. A value with a backslash becomes an E” string, which
+// reads the same whatever standard_conforming_strings is set to.
+func Lit(s string) string {
+	q := strings.ReplaceAll(s, "'", "''")
+	if strings.Contains(s, `\`) {
+		return "E'" + strings.ReplaceAll(q, `\`, `\\`) + "'"
+	}
+	return "'" + q + "'"
+}
 
 var nameRE = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 

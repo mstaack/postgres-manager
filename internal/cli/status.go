@@ -32,10 +32,11 @@ func (a *App) showStatus(ctx context.Context) {
 	c := a.PG.C
 	u.Row("Disk", diskLine(c.DataDir))
 	if a.PG.Ready(ctx) {
-		a.statusPostgres(ctx)
+		set := a.PG.Settings(ctx, "shared_preload_libraries", "archive_mode", "archive_timeout")
+		a.statusPostgres(ctx, set)
 		a.statusUsers(ctx)
 		a.statusApps()
-		a.statusArchiving(ctx)
+		a.statusArchiving(ctx, set)
 	} else {
 		u.Row("Postgres", fmt.Sprintf("%s port %d · %s", c.ID(), c.Port, u.Bad("not accepting connections ("+c.Status+")")))
 	}
@@ -109,7 +110,7 @@ func mountOf(dir string) string {
 	return best
 }
 
-func (a *App) statusPostgres(ctx context.Context) {
+func (a *App) statusPostgres(ctx context.Context, set map[string]string) {
 	u, c := a.UI, a.PG.C
 	rows, err := a.PG.Query(ctx, "postgres", `select current_setting('server_version'),
            extract(epoch from now() - pg_postmaster_start_time())::bigint,
@@ -120,9 +121,23 @@ func (a *App) statusPostgres(ctx context.Context) {
            coalesce((select extract(epoch from max(now() - xact_start))::bigint from pg_stat_activity
                      where backend_type = 'client backend' and xact_start is not null), 0),
            (select coalesce(sum(size), 0) from pg_ls_waldir()),
-           (select count(*) from pg_replication_slots),
-           (select sum(pg_database_size(oid)) from pg_database)`)
-	if err != nil || len(rows) == 0 || len(rows[0]) < 10 {
+           (select count(*) from pg_replication_slots)`)
+	// pg_database_size stats every relation file, so each database is sized exactly once.
+	sizes, sizeErr := a.PG.Query(ctx, "postgres", `select datname, datistemplate, size, pg_size_pretty(size)
+    from (select datname, datistemplate, pg_database_size(oid) as size from pg_database) s order by size desc`)
+	var total int64
+	var dbs []string
+	for _, s := range sizes {
+		if len(s) < 4 {
+			continue
+		}
+		n, _ := strconv.ParseInt(s[2], 10, 64)
+		total += n
+		if s[1] == "f" && len(dbs) < 6 {
+			dbs = append(dbs, s[0]+" "+s[3])
+		}
+	}
+	if err != nil || len(rows) == 0 || len(rows[0]) < 9 {
 		u.Row("Postgres", fmt.Sprintf("%s port %d · %s · %s", c.ID(), c.Port, u.Good("online"), u.Meh("?")))
 	} else {
 		r := rows[0]
@@ -139,12 +154,10 @@ func (a *App) statusPostgres(ctx context.Context) {
 		}
 		u.Row("Postgres", fmt.Sprintf("%s · cluster %s · port %d · %s · up %s", ver, c.ID(), c.Port, u.Good("online"), format.Dur(n(1))))
 		u.Row("", fmt.Sprintf("connections %s · cache hit %s%% · %s", connTxt, r[5], longTxt))
-		u.Row("", fmt.Sprintf("data %s · WAL %s · slots %s · %s", format.Bytes(n(9)), format.Bytes(n(7)), r[8], u.Dim(c.DataDir)))
+		u.Row("", fmt.Sprintf("data %s · WAL %s · slots %s · %s", format.Bytes(total), format.Bytes(n(7)), r[8], u.Dim(c.DataDir)))
 	}
 
-	dbs, err := a.PG.Column(ctx, "postgres", `select datname || ' ' || pg_size_pretty(pg_database_size(oid)) from pg_database
-                where not datistemplate order by pg_database_size(oid) desc limit 6`)
-	if err != nil {
+	if sizeErr != nil {
 		u.Row("Databases", u.Meh("?"))
 	} else {
 		u.Row("Databases", strings.Join(dbs, ", "))
@@ -165,7 +178,7 @@ func (a *App) statusPostgres(ctx context.Context) {
 	if line == "" {
 		line = "none"
 	}
-	u.Row("Extensions", line+" · "+u.Dim("preload: "+a.PG.Setting(ctx, "shared_preload_libraries")))
+	u.Row("Extensions", line+" · "+u.Dim("preload: "+set["shared_preload_libraries"]))
 }
 
 func (a *App) statusUsers(ctx context.Context) {
@@ -210,14 +223,14 @@ func (a *App) statusApps() {
 	}
 }
 
-func (a *App) statusArchiving(ctx context.Context) {
+func (a *App) statusArchiving(ctx context.Context, set map[string]string) {
 	u := a.UI
-	mode := a.PG.Setting(ctx, "archive_mode")
+	mode := set["archive_mode"]
 	if mode != "on" && mode != "always" {
 		u.Row("Archiving", u.Meh("off")+" · no point-in-time recovery")
 		return
 	}
-	timeout := a.PG.Setting(ctx, "archive_timeout")
+	timeout := set["archive_timeout"]
 	rows, err := a.PG.Query(ctx, "postgres", `select archived_count, coalesce(last_archived_wal, '-'), coalesce(extract(epoch from last_archived_time)::bigint, 0),
            failed_count, coalesce(last_failed_wal, '-'), coalesce(extract(epoch from last_failed_time)::bigint, 0)
     from pg_stat_archiver`)
@@ -257,12 +270,12 @@ func (a *App) repoLabels() string {
 	return strings.Join(l, " + ")
 }
 
-func (a *App) scheduleLine() string {
+func scheduleLine(cfg config.Config) string {
 	hb := "heartbeat off"
-	if a.Cfg.Heartbeat != "" {
+	if cfg.Heartbeat != "" {
 		hb = "heartbeat on"
 	}
-	s := a.Cfg.Schedule
+	s := cfg.Schedule
 	return fmt.Sprintf("full %s · diff %s · incr %s · %s", format.Cron(s.Full), format.Cron(s.Diff), format.Cron(s.Incr), hb)
 }
 
@@ -280,12 +293,19 @@ func (a *App) statusBackups(ctx context.Context) {
 		u.Row("Backups", u.Bad("pgbackrest missing")+" · run: pgm setup")
 		return
 	}
-	info, err := backup.Pgbr{R: a.R, Stanza: a.Cfg.Stanza}.Info(ctx)
-	sched := a.scheduleLine()
+	// An unreachable remote repository must not hang the dashboard (and the menu behind it).
+	ictx, cancel := context.WithTimeout(ctx, statusInfoTimeout)
+	info, err := a.pgbr().Info(ictx)
+	timedOut := ictx.Err() != nil && ctx.Err() == nil
+	cancel()
+	sched := scheduleLine(a.Cfg)
 	if next := backup.NextRuns(ctx, a.R); next != "" {
 		sched += " · " + next
 	}
 	switch {
+	case timedOut:
+		err = ictx.Err()
+		u.Row("Backups", u.Bad(fmt.Sprintf("repository did not answer within %s", statusInfoTimeout))+" · details: pgm check")
 	case err != nil:
 		u.Row("Backups", u.Bad("repository not reachable"))
 	case info.Status.Code != 0:
@@ -304,6 +324,11 @@ func (a *App) statusBackups(ctx context.Context) {
 	u.Row("Schedule", sched)
 }
 
+const (
+	statusInfoTimeout  = 30 * time.Second
+	pgbrNoValidBackups = 2 // pgBackRest info status code
+)
+
 // repoLine describes repository i (0-based): "R2 (eu) bucket/path · retention 30 days".
 func repoLine(cfg config.Config, i int) string {
 	return fmt.Sprintf("%s · retention %d days", cfg.Repos[i].Label(), cfg.RepoRetention(i))
@@ -312,12 +337,12 @@ func repoLine(cfg config.Config, i int) string {
 // repoState is the backup state of one repository: last backups, sets, size and the PITR window.
 func (a *App) repoState(info backup.Info) string {
 	u := a.UI
-	if info.Status.Code != 0 && len(info.Backup) == 0 {
-		return u.Bad(orText(info.Status.Message, "error"))
-	}
 	last, ok := info.Latest()
 	if !ok {
-		return u.Meh("no backups yet")
+		if info.Status.Code == 0 || info.Status.Code == pgbrNoValidBackups { // a fresh repository
+			return u.Meh("no backups yet")
+		}
+		return u.Bad(orText(info.Status.Message, "error"))
 	}
 	age := fmt.Sprintf("last %s %s ago", last.Type, format.Ago(last.Timestamp.Stop))
 	if time.Now().Unix()-last.Timestamp.Stop > 2*86400 {

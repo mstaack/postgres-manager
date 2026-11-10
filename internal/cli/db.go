@@ -151,6 +151,9 @@ func (a *App) dbCreate(ctx context.Context, name, owner string) error {
 		a.UI.Info("template1 uses %s — created %s as UTF8 (C.UTF-8) from template0", enc, name)
 	}
 	if err != nil {
+		if password != "" {
+			a.roleKept(ctx, owner, password, show)
+		}
 		return err
 	}
 	a.UI.OK("Created database %s (owner %s)", name, owner)
@@ -182,8 +185,11 @@ func (a *App) dbDrop(ctx context.Context, name string, yes bool) error {
 	}
 	rows, err := a.PG.Query(ctx, "postgres", `select pg_size_pretty(pg_database_size(oid)), pg_get_userbyid(datdba),
   (select count(*) from pg_stat_activity a where a.datid = d.oid) from pg_database d where datname = `+pg.Lit(name))
-	if err != nil || len(rows) == 0 {
-		return fmt.Errorf("cannot read database %s: %v", name, err)
+	if err != nil {
+		return fmt.Errorf("cannot read database %s: %w", name, err)
+	}
+	if len(rows) == 0 || len(rows[0]) < 3 {
+		return fmt.Errorf("cannot read database %s", name)
 	}
 	size, owner, sessions := rows[0][0], rows[0][1], rows[0][2]
 	list := a.Apps()
@@ -201,7 +207,7 @@ func (a *App) dbDrop(ctx context.Context, name string, yes bool) error {
 			return err
 		}
 	}
-	if err := a.PG.Exec(ctx, "postgres", "drop database "+pg.Ident(name)+" with (force)"); err != nil {
+	if err := access.DropDatabase(ctx, a.PG, name); err != nil {
 		return err
 	}
 	a.UI.OK("Dropped database %s", name)
@@ -215,8 +221,9 @@ func (a *App) dbDrop(ctx context.Context, name string, yes bool) error {
 	if busy != "" {
 		return nil
 	}
-	drop, err := a.UI.Confirm(fmt.Sprintf("Also drop its owner %s (owns no other database)?", owner), false)
-	if err != nil || !drop {
+	a.UI.Info("User %s owns no other database. Dropping it also removes its grants; objects it owns in other databases go to postgres.", owner)
+	s, err := a.UI.Ask(fmt.Sprintf("Type '%s' to drop the user too (Enter keeps it)", owner), "")
+	if err != nil || s != owner {
 		return err
 	}
 	if err := access.DropRole(ctx, a.PG, owner); err != nil {

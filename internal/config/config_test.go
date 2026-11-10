@@ -55,3 +55,26 @@ func TestSecretHiddenInFormatting(t *testing.T) {
 		}
 	}
 }
+
+func TestCloneAndValidate(t *testing.T) {
+	c := Defaults()
+	d := c.Clone()
+	d.Repos[0].Bucket = "changed"
+	d.Repos = append(d.Repos, Repo{Type: Posix, Path: "/var/lib/pgbackrest"})
+	if c.Repos[0].Bucket != "" || len(c.Repos) != 1 {
+		t.Fatalf("Clone shares the repositories: %+v", c.Repos)
+	}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("R2 + local: %v", err)
+	}
+	for _, p := range []string{"/var/lib/pgbackrest", "/var/lib/pgbackrest/", "/var/lib/pgbackrest/sub", "/var/lib"} {
+		d.Repos[0] = Repo{Type: Posix, Path: p}
+		if d.Validate() == nil {
+			t.Errorf("%s next to /var/lib/pgbackrest must be rejected", p)
+		}
+	}
+	d.Repos[0] = Repo{Type: Posix, Path: "/var/lib/pgbackrest2"}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("separate directories: %v", err)
+	}
+}

@@ -31,3 +31,16 @@ func TestCatalog(t *testing.T) {
 		t.Fatal("snippet")
 	}
 }
+
+func TestSnippetValue(t *testing.T) {
+	s := RenderSnippet("timescaledb,pg_cron", "it's")
+	if got := SnippetValue(s, "shared_preload_libraries"); got != "timescaledb,pg_cron" {
+		t.Fatalf("preload %q", got)
+	}
+	if got := SnippetValue(s, "cron.database_name"); got != "it's" {
+		t.Fatalf("cron db %q from %q", got, s)
+	}
+	if SnippetValue("", "cron.database_name") != "" {
+		t.Fatal("empty snippet")
+	}
+}

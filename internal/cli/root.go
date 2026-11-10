@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -34,6 +35,7 @@ type App struct {
 	PG         pg.PG // zero Cluster when HasCluster is false
 	HasCluster bool
 	Version    string
+	cluster    string // --cluster
 	apt        *apt.Apt
 }
 
@@ -52,7 +54,10 @@ func (a *App) Apps() []apps.App { return apps.Scan(apps.EnvFiles()) }
 const (
 	annNoCluster = "pgm/no-cluster" // runs without a cluster
 	annLocal     = "pgm/local"      // client command: no root, no PostgreSQL (also on macOS)
+	annPipe      = "pgm/pipe"       // stdout or stdin carries a dump: never prompt, nothing but data on stdout
 )
+
+var clusterRE = regexp.MustCompile(`^[0-9]+/[A-Za-z0-9_.-]+$`)
 
 func newRoot(version string) *cobra.Command {
 	a := &App{UI: ui.New(), R: sys.Default, Version: version}
@@ -75,6 +80,7 @@ func newRoot(version string) *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return a.mainMenu(cmd.Context()) },
 	}
+	root.PersistentFlags().StringVar(&a.cluster, "cluster", "", "Cluster to manage, e.g. 17/main (default: the configured one, $PGM_CLUSTER, or the only one)")
 	root.SetVersionTemplate("{{.Version}}\n")
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.AddCommand(
@@ -100,11 +106,14 @@ func (a *App) prepare(cmd *cobra.Command) error {
 	if err := cmd.ValidateFlagGroups(); err != nil { // cobra checks these only after the pre-run hooks
 		return err
 	}
+	if a.cluster != "" && !clusterRE.MatchString(a.cluster) {
+		return fmt.Errorf("invalid --cluster %q (expected VERSION/NAME, e.g. 17/main)", a.cluster)
+	}
 	if cmd.Annotations[annLocal] != "" {
 		return nil
 	}
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("%s runs on the Debian/Ubuntu server; on %s pgm only sends and receives dumps (pgm receive, pgm send)", cmd.CommandPath(), runtime.GOOS)
+		return fmt.Errorf("%s runs on the Debian/Ubuntu server; on %s pgm only sends and receives dumps and updates itself (pgm receive, pgm send, pgm self-update)", cmd.CommandPath(), runtime.GOOS)
 	}
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("Run as root: sudo %s", cmd.CommandPath()) //nolint:staticcheck // user-facing
@@ -125,11 +134,20 @@ func (a *App) prepare(cmd *cobra.Command) error {
 		}
 		return pg.ErrNoCluster
 	}
-	return a.selectCluster(cmd.Annotations[annNoCluster] != "")
+	return a.selectCluster(cmd.Annotations[annNoCluster] != "", cmd.Annotations[annPipe] != "")
 }
 
-// selectCluster picks the configured cluster, PGM_CLUSTER, the only one, or asks.
-func (a *App) selectCluster(optional bool) error {
+// selectCluster picks --cluster, PGM_CLUSTER, the configured cluster, the only one, or
+// asks. piped commands (a dump on stdout or stdin) never ask and keep stdout clean.
+func (a *App) selectCluster(optional, piped bool) error {
+	if a.cluster != "" {
+		c, ok := pg.Find(a.Clusters, a.cluster)
+		if !ok {
+			return fmt.Errorf("cluster %s not found (see: pg_lsclusters)", a.cluster)
+		}
+		a.setCluster(c)
+		return nil
+	}
 	want := a.Cfg.Cluster
 	if env := os.Getenv("PGM_CLUSTER"); env != "" {
 		want = env
@@ -139,11 +157,22 @@ func (a *App) selectCluster(optional bool) error {
 			a.setCluster(c)
 			return nil
 		}
-		a.UI.Warn("Configured cluster %s not found", want)
+		if piped {
+			fmt.Fprintf(os.Stderr, "! Configured cluster %s not found\n", want)
+		} else {
+			a.UI.Warn("Configured cluster %s not found", want)
+		}
 	}
 	if len(a.Clusters) == 1 {
 		a.setCluster(a.Clusters[0])
 		return nil
+	}
+	if piped {
+		ids := make([]string, len(a.Clusters))
+		for i, c := range a.Clusters {
+			ids[i] = c.ID()
+		}
+		return fmt.Errorf("several PostgreSQL clusters (%s) — choose one with --cluster", strings.Join(ids, ", "))
 	}
 	a.UI.Header("Multiple PostgreSQL clusters")
 	labels := make([]string, len(a.Clusters))
@@ -185,8 +214,9 @@ func (a *App) requireConfigured() error {
 	return nil
 }
 
-// writeSnippet writes a conf.d snippet and offers to reset ALTER SYSTEM overrides.
-func (a *App) writeSnippet(ctx context.Context, file, content string) error {
+// writeSnippet writes a conf.d snippet and offers to reset ALTER SYSTEM overrides
+// (yes = reset them without asking).
+func (a *App) writeSnippet(ctx context.Context, file, content string, yes bool) error {
 	added, overrides, err := a.PG.WriteSnippet(ctx, file, content)
 	if added {
 		a.UI.Info("Added include_dir = 'conf.d' to %s/postgresql.conf", a.PG.C.EtcDir())
@@ -200,11 +230,13 @@ func (a *App) writeSnippet(ctx context.Context, file, content string) error {
 			continue
 		}
 		a.UI.Warn("%s is overridden by ALTER SYSTEM (%s)", o.Name, o.Source)
-		yes, err := a.UI.Confirm(fmt.Sprintf("Run ALTER SYSTEM RESET %s so %s applies?", o.Name, file), true)
-		if err != nil {
-			return err
+		reset := yes
+		if !yes {
+			if reset, err = a.UI.Confirm(fmt.Sprintf("Run ALTER SYSTEM RESET %s so %s applies?", o.Name, file), true); err != nil {
+				return err
+			}
 		}
-		if yes {
+		if reset {
 			if err := a.PG.ResetAlterSystem(ctx, o.Name); err != nil {
 				return err
 			}

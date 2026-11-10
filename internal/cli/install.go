@@ -197,10 +197,18 @@ func (a *App) upgrade(ctx context.Context, to string, yes bool) error {
 	}
 	if c, ok := pg.Find(clusters, to+"/"+old.Name); ok {
 		// Debian creates an empty <to>/main when the package is installed; pg_upgradecluster needs it gone.
+		// It is only dropped when it provably holds no databases: a stopped one is started to look.
 		p := pg.PG{R: a.R, C: c}
-		n := "0"
-		if p.Ready(ctx) {
-			n, _ = p.Value(ctx, "postgres", "select count(*) from pg_database where datname not in ('postgres', 'template0', 'template1')")
+		if !p.Ready(ctx) {
+			u.Info("Starting the existing cluster %s to check that it is empty", c.ID())
+			_ = p.Ctl(ctx, "start")
+			if err := p.WaitReady(ctx, 60*time.Second); err != nil {
+				return fmt.Errorf("cluster %s already exists and does not start, so it cannot be checked for databases — remove it yourself (pg_dropcluster %s %s) if it is not needed", c.ID(), c.Version, c.Name)
+			}
+		}
+		n, err := p.Value(ctx, "postgres", "select count(*) from pg_database where datname not in ('postgres', 'template0', 'template1')")
+		if err != nil {
+			return fmt.Errorf("cannot check cluster %s for databases: %w", c.ID(), err)
 		}
 		if n != "0" {
 			return fmt.Errorf("cluster %s already exists and has databases — move it away first", c.ID())
@@ -227,7 +235,7 @@ func (a *App) upgrade(ctx context.Context, to string, yes bool) error {
 			return err
 		}
 	}
-	unlock, err := sys.Lock(backup.LockFile, 0)
+	unlock, err := sys.Lock(ctx, backup.LockFile, 0)
 	if err != nil {
 		return errors.New("a backup is running — wait for it to finish")
 	}
@@ -249,7 +257,7 @@ func (a *App) upgrade(ctx context.Context, to string, yes bool) error {
 	u.OK("Upgraded to %s (port %d); the old cluster %s is stopped", nc.ID(), nc.Port, old.ID())
 
 	if snip := (pg.PG{R: a.R, C: old}).ReadSnippet(pg.SnippetExtensions); snip != "" {
-		if err := a.writeSnippet(ctx, pg.SnippetExtensions, snip); err != nil {
+		if err := a.writeSnippet(ctx, pg.SnippetExtensions, snip, yes); err != nil {
 			return err
 		}
 	}

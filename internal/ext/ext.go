@@ -86,9 +86,28 @@ func AddPreload(preload string, libs ...string) (string, bool) {
 
 // RenderSnippet renders 91-postgres-manager-extensions.conf.
 func RenderSnippet(preload, cronDB string) string {
-	s := "# Managed by pgm — extension settings.\nshared_preload_libraries = '" + preload + "'\n"
+	q := func(v string) string { return "'" + strings.ReplaceAll(v, "'", "''") + "'" }
+	s := "# Managed by pgm — extension settings.\nshared_preload_libraries = " + q(preload) + "\n"
 	if cronDB != "" {
-		s += "cron.database_name = '" + cronDB + "'\n"
+		s += "cron.database_name = " + q(cronDB) + "\n"
 	}
 	return s
+}
+
+// SnippetValue reads setting name back from a rendered snippet ("" if absent). The
+// snippet holds what applies after the next restart, which the running server does not
+// report yet.
+func SnippetValue(snippet, name string) string {
+	for _, l := range strings.Split(snippet, "\n") {
+		k, v, ok := strings.Cut(l, "=")
+		if !ok || strings.TrimSpace(k) != name {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if len(v) >= 2 && v[0] == '\'' && v[len(v)-1] == '\'' {
+			v = strings.ReplaceAll(v[1:len(v)-1], "''", "'")
+		}
+		return v
+	}
+	return ""
 }
