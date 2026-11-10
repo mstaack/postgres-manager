@@ -183,6 +183,10 @@ func (b Pgbr) Backup(ctx context.Context, typ string, repos int) error {
 	return nil
 }
 
+// UserAgent identifies heartbeat pings; Go's default "Go-http-client" is blocked by
+// bot protection such as Cloudflare's Browser Integrity Check.
+var UserAgent = "pgm"
+
 // Heartbeat pings url+suffix (healthchecks.io style), 10s timeout, 3 tries.
 func Heartbeat(ctx context.Context, url, suffix string) error {
 	if url == "" {
@@ -196,6 +200,7 @@ func Heartbeat(ctx context.Context, url, suffix string) error {
 		if err != nil {
 			return err
 		}
+		req.Header.Set("User-Agent", UserAgent)
 		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()

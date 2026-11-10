@@ -16,6 +16,7 @@ import (
 
 	"github.com/mstaack/postgres-manager/internal/apps"
 	"github.com/mstaack/postgres-manager/internal/apt"
+	"github.com/mstaack/postgres-manager/internal/backup"
 	"github.com/mstaack/postgres-manager/internal/config"
 	"github.com/mstaack/postgres-manager/internal/pg"
 	"github.com/mstaack/postgres-manager/internal/sys"
@@ -244,5 +245,6 @@ func splitList(s string) []string {
 func Execute(version string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	backup.UserAgent = "pgm/" + version
 	return newRoot(version).ExecuteContext(ctx)
 }
