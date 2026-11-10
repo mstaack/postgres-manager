@@ -125,6 +125,7 @@ func TestRenderStandaloneConfNeverArchives(t *testing.T) {
 }
 
 const infoJSON = `[{"name":"main","status":{"code":0,"message":"ok","lock":{"backup":{"held":true}}},
+ "repo":[{"key":1,"status":{"code":0,"message":"ok"}},{"key":2,"status":{"code":2,"message":"no valid backups"}}],
  "archive":[{"min":"000000010000000000000001","max":"000000010000000000000009","database":{"repo-key":1}}],
  "backup":[
   {"label":"20261101-013001F","type":"full","timestamp":{"start":1000,"stop":1100},"info":{"size":500,"delta":500,"repository":{"size":100,"delta":100}},"database":{"repo-key":2}},
@@ -149,6 +150,13 @@ func TestParseInfo(t *testing.T) {
 	}
 	if empty, err := ParseInfo("[]"); err != nil || empty.Status.Code == 0 {
 		t.Fatalf("empty info must not look ok: %+v %v", empty, err)
+	}
+	r1, r2 := i.ForRepo(1), i.ForRepo(2)
+	if len(r1.Backup) != 2 || r1.RepoDelta() != 105 || len(r1.Arch) != 1 || r1.Status.Code != 0 || !r1.Status.Lock.Backup.Held {
+		t.Fatalf("repo1: %+v", r1)
+	}
+	if len(r2.Backup) != 1 || len(r2.Arch) != 0 || r2.Status.Message != "no valid backups" {
+		t.Fatalf("repo2: %+v", r2)
 	}
 }
 

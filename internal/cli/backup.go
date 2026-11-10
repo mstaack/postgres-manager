@@ -281,7 +281,9 @@ func (a *App) setup(ctx context.Context) error {
 	u.Header("Schedule & retention")
 	a.Cfg = cfg
 	u.Row("Schedule", a.scheduleLine())
-	u.Row("Retention", fmt.Sprintf("%d days", cfg.Retention))
+	for i := range cfg.Repos {
+		u.Row(fmt.Sprintf("repo%d", i+1), repoLine(cfg, i))
+	}
 	u.Row("RPO", fmt.Sprintf("archive_timeout %ds", cfg.ArchiveTimeout))
 	u.Row("Parallel", fmt.Sprintf("%d processes · zstd level %d", cfg.ProcessMax, cfg.CompressLevel))
 	ok, err := u.Confirm("Use these settings?", true)
@@ -600,7 +602,7 @@ func (a *App) promptSecondRepo(cfg *config.Config) error {
 	if r.Path, err = a.askLocalDir("Local repository directory", r.Path, !has); err != nil {
 		return err
 	}
-	if r.Retention, err = a.pickRetention("Retention of the local copy", localRetention, max(r.Retention, 1)); err != nil {
+	if r.Retention, err = a.pickRetention("Retention of repo2 ("+r.Label()+")", localRetention, max(r.Retention, 1)); err != nil {
 		return err
 	}
 	cfg.Repos = append(cfg.Repos[:1], r)
@@ -777,8 +779,8 @@ func (a *App) editRetention(cfg *config.Config) error {
 	if cfg.Repos[0].Type == config.Posix {
 		presets = localRetention
 	}
-	v, err := a.pickRetention("Retention", presets, cfg.Retention)
-	cfg.Retention = v
+	v, err := a.pickRetention("Retention of repo1 ("+cfg.Repos[0].Label()+")", presets, cfg.RepoRetention(0))
+	cfg.Retention, cfg.Repos[0].Retention = v, 0 // repo1 follows the global retention
 	return err
 }
 
@@ -888,12 +890,12 @@ func (a *App) edit(ctx context.Context) error {
 		u.Header("Backup settings")
 		pick, err := u.Choose("Change", []string{
 			"Schedule            " + a.scheduleLine(),
-			fmt.Sprintf("Retention           %d days", cfg.Retention),
+			fmt.Sprintf("Retention (repo1)   %d days", cfg.RepoRetention(0)),
 			fmt.Sprintf("RPO                 archive_timeout %ds", cfg.ArchiveTimeout),
 			fmt.Sprintf("Performance         %d processes, zstd %d", cfg.ProcessMax, cfg.CompressLevel),
 			"WAL queue limit     " + cfg.ArchiveQueueMax,
 			"Heartbeat URL       " + orText(cfg.Heartbeat, "off"),
-			"Repository          " + cfg.Repos[0].Label(),
+			"Repository (repo1)  " + cfg.Repos[0].Label(),
 			"Local copy (repo2)  " + second,
 			"Show encryption passphrase",
 			"Save & apply"}, 9)

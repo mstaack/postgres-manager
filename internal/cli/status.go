@@ -13,6 +13,7 @@ import (
 
 	"github.com/mstaack/postgres-manager/internal/access"
 	"github.com/mstaack/postgres-manager/internal/backup"
+	"github.com/mstaack/postgres-manager/internal/config"
 	"github.com/mstaack/postgres-manager/internal/format"
 	"github.com/mstaack/postgres-manager/internal/sys"
 )
@@ -284,28 +285,56 @@ func (a *App) statusBackups(ctx context.Context) {
 	if next := backup.NextRuns(ctx, a.R); next != "" {
 		sched += " · " + next
 	}
-	if err != nil || info.Status.Code != 0 || len(info.Backup) == 0 {
-		msg := "repository not reachable"
-		if err == nil && info.Status.Message != "" {
-			msg = info.Status.Message
-		}
-		u.Row("Backups", u.Bad(msg)+" · "+a.repoLabels())
-		u.Row("Schedule", sched)
-		return
+	switch {
+	case err != nil:
+		u.Row("Backups", u.Bad("repository not reachable"))
+	case info.Status.Code != 0:
+		u.Row("Backups", u.Bad(orText(info.Status.Message, "error")))
+	case info.Status.Lock.Backup.Held:
+		u.Row("Backups", u.Good("ok")+" · "+u.Meh("backup running"))
+	default:
+		u.Row("Backups", u.Good("ok"))
 	}
-	last, _ := info.Latest()
+	for i := range a.Cfg.Repos {
+		u.Row(fmt.Sprintf("repo%d", i+1), repoLine(a.Cfg, i))
+		if err == nil {
+			u.Row("", a.repoState(info.ForRepo(i+1)))
+		}
+	}
+	u.Row("Schedule", sched)
+}
+
+// repoLine describes repository i (0-based): "R2 (eu) bucket/path · retention 30 days".
+func repoLine(cfg config.Config, i int) string {
+	return fmt.Sprintf("%s · retention %d days", cfg.Repos[i].Label(), cfg.RepoRetention(i))
+}
+
+// repoState is the backup state of one repository: last backups, sets, size and the PITR window.
+func (a *App) repoState(info backup.Info) string {
+	u := a.UI
+	if info.Status.Code != 0 && len(info.Backup) == 0 {
+		return u.Bad(orText(info.Status.Message, "error"))
+	}
+	last, ok := info.Latest()
+	if !ok {
+		return u.Meh("no backups yet")
+	}
 	age := fmt.Sprintf("last %s %s ago", last.Type, format.Ago(last.Timestamp.Stop))
 	if time.Now().Unix()-last.Timestamp.Stop > 2*86400 {
 		age = u.Bad(age)
 	}
 	if full, ok := info.LastFull(); ok && last.Type != "full" {
-		age += " · last full " + format.Ago(full.Timestamp.Stop) + " ago"
+		age += " · full " + format.Ago(full.Timestamp.Stop) + " ago"
 	}
-	if info.Status.Lock.Backup.Held {
-		age += " · " + u.Meh("backup running")
+	st := u.Good("ok")
+	if info.Status.Code != 0 {
+		st = u.Bad(orText(info.Status.Message, "error"))
 	}
-	u.Row("Backups", fmt.Sprintf("%s · %s · %d sets · %s in repo", u.Good("ok"), age, len(info.Backup), format.Bytes(info.RepoDelta())))
+	sets := fmt.Sprintf("%d sets", len(info.Backup))
+	if len(info.Backup) == 1 {
+		sets = "1 set"
+	}
 	oldest := info.Backup[0].Timestamp.Stop
-	u.Row("PITR", fmt.Sprintf("from %s (%s) until now · retention %dd · %s", format.TS(oldest), format.Ago(oldest), a.Cfg.Retention, a.repoLabels()))
-	u.Row("Schedule", sched)
+	return fmt.Sprintf("%s · %s · %s · %s · PITR from %s (%s)", st, age, sets,
+		format.Bytes(info.RepoDelta()), format.TS(oldest), format.Ago(oldest))
 }

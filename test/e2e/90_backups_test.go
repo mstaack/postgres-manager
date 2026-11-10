@@ -147,6 +147,9 @@ func TestBackups(t *testing.T) {
 		check(t, fileMatches("/etc/pgbackrest/pgbackrest.conf", `(?m)^repo2-path=/var/lib/pgbackrest2`), "pgbackrest.conf has repo2")
 		check(t, fileMatches("/etc/pgbackrest/pgbackrest.conf", `(?m)^repo2-retention-full=3`), "repo2 has its own retention")
 		has(t, pm("list").out, "repo2", "list shows backups in repo2")
+		st := pm("status").out
+		has(t, st, "local /var/lib/pgbackrest2 · retention 3 days", "status shows repo2 with its retention")
+		has(t, st, "retention 14 days", "status shows repo1 with its retention")
 	})
 
 	t.Run("single database restore", func(t *testing.T) {

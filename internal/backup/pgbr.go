@@ -165,6 +165,28 @@ func (i Info) RepoDelta() int64 {
 	return n
 }
 
+// ForRepo narrows the info to repository key (1-based): its sets, WAL ranges and status.
+// Without a per-repo status (one repository, older pgBackRest) the stanza status is kept.
+func (i Info) ForRepo(key int) Info {
+	out := Info{Name: i.Name, Status: i.Status}
+	for _, r := range i.Repo {
+		if r.Key == key {
+			out.Status.Code, out.Status.Message = r.Status.Code, r.Status.Message
+		}
+	}
+	for _, s := range i.Backup {
+		if s.Database.RepoKey == key {
+			out.Backup = append(out.Backup, s)
+		}
+	}
+	for _, a := range i.Arch {
+		if a.Database.RepoKey == key {
+			out.Arch = append(out.Arch, a)
+		}
+	}
+	return out
+}
+
 // Find returns the set with label (on any repo, preferring the highest repo key = local copy).
 func (i Info) Find(label string) (Set, bool) {
 	var found Set
