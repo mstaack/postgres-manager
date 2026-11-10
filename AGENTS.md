@@ -23,7 +23,7 @@ Go CLI (`pgm`) that manages PostgreSQL on Debian/Ubuntu servers: a status dashbo
 ## Commands
 - `make build`: `dist/pgm-linux-$(ARCH)` (static, `CGO_ENABLED=0`). `make build-all`: Linux + macOS.
 - `make unit`: `go test ./...`. `make lint`: `go vet` + golangci-lint v2 in Docker; must stay clean.
-- `make test`: e2e on `DISTROS`; a subset: `make test DISTROS=debian:12 RUN='Users|Menu'` (needs Docker; `Upgrade` needs `Backups` first).
+- `make test`: e2e on `DISTROS`; a subset: `make test DISTROS=debian:13 RUN='Users|Menu'` (needs Docker; `Upgrade` needs `Backups` first).
 - Test containers carry `--label postgres-manager-test=1`. To clean up, kill only labelled containers or a specific id, **never** `docker kill $(docker ps -q)`: other projects' containers run on this machine.
 
 ## Design rules

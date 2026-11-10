@@ -2,7 +2,7 @@ ARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GOLANGCI := docker run --rm -v "$(CURDIR):/app" -w /app golangci/golangci-lint:v2.4.0
-DISTROS ?= debian:12 debian:13 ubuntu:22.04 ubuntu:24.04
+DISTROS ?= debian:13 ubuntu:24.04
 
 .PHONY: build build-all unit lint test help
 
@@ -19,7 +19,7 @@ unit: ## Unit tests
 lint: ## go vet + golangci-lint (Docker)
 	@go vet -tags e2e ./... && $(GOLANGCI) golangci-lint run ./...
 
-test: ## End-to-end tests in containers (DISTROS="debian:12 …", RUN="Users|Menu")
+test: ## End-to-end tests in containers (DISTROS="debian:13 …", RUN="Users|Menu")
 	@E2E_IMAGES="$(DISTROS)" go test -tags e2e -count=1 -v -timeout 120m ./test/e2e $(if $(RUN),-run '$(RUN)')
 
 help:

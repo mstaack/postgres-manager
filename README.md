@@ -183,7 +183,7 @@ Set a heartbeat URL (for example [healthchecks.io](https://healthchecks.io) or U
 
 ## Requirements
 
-- Debian or Ubuntu with PostgreSQL from the `postgresql-common` packages (`pg_lsclusters`), or none yet (`pgm install`). Tested on Debian 12/13 and Ubuntu 22.04/24.04, amd64 and arm64.
+- Debian or Ubuntu with PostgreSQL from the `postgresql-common` packages (`pg_lsclusters`), or none yet (`pgm install`). Tested on Debian 13 and Ubuntu 24.04, amd64 and arm64.
 - Run it as root.
 - A physical restore needs the same PostgreSQL major version and the same extension versions (for example TimescaleDB) as the source.
 
@@ -196,8 +196,8 @@ make build       # dist/pgm-linux-<arch>
 make build-all   # Linux + macOS, amd64 + arm64
 make unit        # go test ./...
 make lint        # go vet + golangci-lint (Docker)
-make test        # e2e on Debian 12/13 and Ubuntu 22.04/24.04 (Docker)
-make test DISTROS=debian:12 RUN='Users|Menu'   # a subset
+make test        # e2e on Debian 13 and Ubuntu 24.04 (Docker)
+make test DISTROS=debian:13 RUN='Users|Menu'   # a subset
 ```
 
 The e2e tests (`test/e2e`, build tag `e2e`) are Go tests. On the host, `go test -tags e2e ./test/e2e` cross-compiles pgm and the test binary for Linux. It then runs the test binary as root in a throwaway container per image (labelled `postgres-manager-test=1`). That binary installs PostgreSQL, pgm and a Forge-style app fixture, then runs the suites in file order: cli, extensions, databases, users, menu (including pty ESC and secret input), ssh transfer, tune, backups (setup, PITR, drill, second repository, single-database and live restore) and major upgrade.

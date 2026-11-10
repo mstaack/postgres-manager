@@ -3,7 +3,7 @@
 // Package e2e holds the end-to-end tests. They run in throwaway Docker containers:
 //
 //	go test -tags e2e -count=1 -v -timeout 60m ./test/e2e
-//	E2E_IMAGES="debian:12 ubuntu:24.04" go test -tags e2e -count=1 -v -timeout 90m ./test/e2e -run 'Users|Menu'
+//	E2E_IMAGES="debian:13 ubuntu:24.04" go test -tags e2e -count=1 -v -timeout 90m ./test/e2e -run 'Users|Menu'
 //
 // On the host, TestMain cross-compiles pgm and this test binary for Linux and runs the
 // test binary as root in a container per image (labelled postgres-manager-test=1). In the
