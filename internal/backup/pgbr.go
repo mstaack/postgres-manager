@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -16,10 +18,16 @@ import (
 type Pgbr struct {
 	R      sys.Runner
 	Stanza string
+	// Log, when set, receives a copy of Stream's stdout and stderr (e.g. a Tail for heartbeat reports).
+	Log io.Writer
 }
 
 func (b Pgbr) cmd(args ...string) sys.Cmd {
-	return sys.Cmd{Name: "pgbackrest", Args: append([]string{"--stanza=" + b.Stanza}, args...), AsPostgres: true}
+	c := sys.Cmd{Name: "pgbackrest", Args: append([]string{"--stanza=" + b.Stanza}, args...), AsPostgres: true}
+	if b.Log != nil {
+		c.Stdout, c.Stderr = io.MultiWriter(os.Stdout, b.Log), io.MultiWriter(os.Stderr, b.Log)
+	}
+	return c
 }
 
 // Stream runs pgbackrest with output on the terminal.
@@ -187,20 +195,28 @@ func (b Pgbr) Backup(ctx context.Context, typ string, repos int) error {
 // bot protection such as Cloudflare's Browser Integrity Check.
 var UserAgent = "pgm"
 
-// Heartbeat pings url+suffix (healthchecks.io style), 10s timeout, 3 tries.
-func Heartbeat(ctx context.Context, url, suffix string) error {
+// Heartbeat pings url+suffix (healthchecks.io style), 10s timeout, 3 tries. A non-empty
+// body (e.g. the failure report) is sent as a text/plain POST, otherwise it is a GET.
+func Heartbeat(ctx context.Context, url, suffix, body string) error {
 	if url == "" {
 		return nil
 	}
 	target := strings.TrimRight(url, "/") + suffix
+	method := http.MethodGet
+	if body != "" {
+		method = http.MethodPost
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	var last error
 	for try := 0; try < 3; try++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		req, err := http.NewRequestWithContext(ctx, method, target, strings.NewReader(body))
 		if err != nil {
 			return err
 		}
 		req.Header.Set("User-Agent", UserAgent)
+		if body != "" {
+			req.Header.Set("Content-Type", "text/plain; charset=utf-8")
+		}
 		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()

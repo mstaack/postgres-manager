@@ -124,20 +124,24 @@ func (a *App) cronBackup(ctx context.Context, typ string) error {
 		return nil
 	}
 	if err != nil {
-		a.heartbeat(ctx, "/fail")
-		return fmt.Errorf("timed out waiting for another backup: %w", err)
-	}
-	defer unlock()
-	if err := a.pgbr().Backup(ctx, typ, len(a.Cfg.Repos)); err != nil {
-		a.heartbeat(ctx, "/fail")
+		err = fmt.Errorf("timed out waiting for another backup: %w", err)
+		a.heartbeat(ctx, "/fail", backup.FailureReport(typ, err, ""))
 		return err
 	}
-	a.heartbeat(ctx, "")
+	defer unlock()
+	log := &backup.Tail{Max: 30}
+	pgbr := a.pgbr()
+	pgbr.Log = log
+	if err := pgbr.Backup(ctx, typ, len(a.Cfg.Repos)); err != nil {
+		a.heartbeat(ctx, "/fail", backup.FailureReport(typ, err, log.String()))
+		return err
+	}
+	a.heartbeat(ctx, "", "")
 	return nil
 }
 
-func (a *App) heartbeat(ctx context.Context, suffix string) {
-	if err := backup.Heartbeat(ctx, a.Cfg.Heartbeat, suffix); err != nil {
+func (a *App) heartbeat(ctx context.Context, suffix, body string) {
+	if err := backup.Heartbeat(ctx, a.Cfg.Heartbeat, suffix, body); err != nil {
 		a.UI.Warn("Heartbeat ping failed: %v", err)
 	}
 }

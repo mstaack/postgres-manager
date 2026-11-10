@@ -20,6 +20,7 @@ type Cmd struct {
 	AsPostgres bool      // run as: runuser -u postgres -- Name Args...
 	Env        []string  // appended to the base environment
 	Stdout     io.Writer // Stream only: where stdout goes (default the terminal)
+	Stderr     io.Writer // Stream only: where stderr goes (default the terminal)
 }
 
 // Runner starts processes. Tests use FakeRunner.
@@ -98,6 +99,9 @@ func (ExecRunner) Stream(ctx context.Context, c Cmd) error {
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if c.Stdout != nil {
 		cmd.Stdout = c.Stdout
+	}
+	if c.Stderr != nil {
+		cmd.Stderr = c.Stderr
 	}
 	return wrap(c, cmd.Run(), "")
 }
